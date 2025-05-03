@@ -1,12 +1,12 @@
 
 Code 1
-1. x := 3;
-2. if (x < 5) {
-3. y := x + 1;
-4. } else {
-5. y := x - 1;
-6. }
-7. assert(y > 0);
+x = 3;
+if (x < 5) {
+y = x + 1;
+} else {
+y = x - 1;
+}
+assert(y > 0);
 
 SSA:
 1. x1 := 3
@@ -22,11 +22,11 @@ SSA:
 
 
 Code 2
-1. x := 0;
-2. while (x < 4) {
-3. x := x + 1;
-4. }
-5. assert(x == 4);
+x = 0;
+while (x < 4) {
+x = x + 1;
+ }
+assert(x == 4);
 SSA:
 1. x0 := 0             // initial assignment
 2. φ1 := (x0 < 4)      // loop condition check
@@ -51,15 +51,15 @@ SSA:
 
 
 Code 3
-1. for (i := 0; i < n; i := i + 1) {
-2. for (j := 0; j < n - i - 1; j := j + 1) {
-3. if (arr[j] > arr[j+1]) {
-4. temp := arr[j];
-5. arr[j] := arr[j+1];
-6. arr[j+1] := temp;
-7. }
-8. }
-9. }
+for (i := 0; i < n; i := i + 1) {
+for (j := 0; j < n - i - 1; j := j + 1) {
+if (arr[j] > arr[j+1]) {
+temp := arr[j];
+arr[j] := arr[j+1];
+arr[j+1] := temp;
+}
+}
+}
 
 
 SSA:
