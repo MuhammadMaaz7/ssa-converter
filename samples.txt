@@ -131,3 +131,48 @@ SSA::
 13  i₉ = φ₃ ? i₈ : i₄           // merge: second if ran or not
 14  i₁₀ = φ₁ ? i₉ : i₀          // merge: outer if ran or not
 
+
+
+
+//Sample codes for testing
+
+for (; i < next; i = i + 1) {
+    if (data[i] == cookie)
+        i = i + 1;
+    else
+        Process(data[i]);
+}
+
+
+
+
+if (i < next) {
+    if (data[i] == cookie)
+        i = i + 1;
+    else
+        Process(data[i]);
+    i = i + 1;
+
+    if (i < next) {
+        if (data[i] == cookie)
+            i = i + 1;
+        else
+            Process(data[i]);
+        i = i + 1;
+    }
+}
+
+
+for (i := 0; i < n; i := i + 1) 
+{
+    for (j := 0; j < n - i - 1; j := j + 1) 
+    {
+        if (arr[j] > arr[j+1]) {
+            temp := arr[j];
+            arr[j] := arr[j+1];
+            arr[j+1] := temp;
+        }
+    }
+}
+
+
