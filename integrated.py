@@ -90,6 +90,11 @@ class LoopUnrollSSAApp:
         self.input_box = scrolledtext.ScrolledText(root, height=12, width=100)
         self.input_box.pack()
 
+        tk.Label(root, text="Number of Unrolls:").pack()
+        self.unroll_entry = tk.Entry(root)
+        self.unroll_entry.insert(0, "2")
+        self.unroll_entry.pack()
+
         self.process_button = tk.Button(root, text="Unroll and Convert to SSA", command=self.process)
         self.process_button.pack()
 
@@ -103,12 +108,21 @@ class LoopUnrollSSAApp:
 
     def process(self):
         code = self.input_box.get("1.0", tk.END).strip()
+        try:
+            unroll_count = int(self.unroll_entry.get())
+            if unroll_count < 1:
+                raise ValueError("Unroll count must be at least 1")
+        except ValueError:
+            self.unrolled_output.delete("1.0", tk.END)
+            self.unrolled_output.insert(tk.END, "Error: Invalid unroll count\n")
+            return
+
         if not code:
             self.unrolled_output.insert(tk.END, "Error: No input provided\n")
             return
 
         try:
-            unrolled = unroll_loop(code)
+            unrolled = unroll_loop(code, unroll_count)
             self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, unrolled)
 
@@ -117,6 +131,7 @@ class LoopUnrollSSAApp:
             self.ssa_output.insert(tk.END, "\n".join(ssa_code))
 
         except Exception as e:
+            self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, f"Error: {str(e)}\n")
 
     def convert_to_ssa(self, raw_code):
