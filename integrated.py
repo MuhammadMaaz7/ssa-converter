@@ -90,6 +90,12 @@ class LoopUnrollSSAApp:
         self.input_box = scrolledtext.ScrolledText(root, height=12, width=100)
         self.input_box.pack()
 
+        self.unroll_count_label = tk.Label(root, text="Unroll Count:")
+        self.unroll_count_label.pack()
+        self.unroll_count_entry = tk.Entry(root)
+        self.unroll_count_entry.insert(0, "2")
+        self.unroll_count_entry.pack()
+
         self.process_button = tk.Button(root, text="Unroll and Convert to SSA", command=self.process)
         self.process_button.pack()
 
@@ -108,7 +114,12 @@ class LoopUnrollSSAApp:
             return
 
         try:
-            unrolled = unroll_loop(code)
+            unroll_count = int(self.unroll_count_entry.get())
+        except ValueError:
+            unroll_count = 2
+
+        try:
+            unrolled = unroll_loop(code, unroll_count)
             self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, unrolled)
 
@@ -118,7 +129,11 @@ class LoopUnrollSSAApp:
 
         except Exception as e:
             self.unrolled_output.delete("1.0", tk.END)
-            self.unrolled_output.insert(tk.END, f"Error: {str(e)}\n")
+            self.unrolled_output.insert(tk.END, f"Unrolling failed. Showing original code.\n\n{code}")
+
+            ssa_code = self.convert_to_ssa(code.splitlines())
+            self.ssa_output.delete("1.0", tk.END)
+            self.ssa_output.insert(tk.END, "\n".join(ssa_code))
 
     def convert_to_ssa(self, raw_code):
         ssa_lines = []
@@ -137,11 +152,9 @@ class LoopUnrollSSAApp:
 
         for line in raw_code:
             line = line.strip()
-
             if not line or line.startswith("//"):
                 continue
 
-            # Handle if / while condition
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
                 keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
@@ -150,13 +163,11 @@ class LoopUnrollSSAApp:
                 for var in set(vars_in_cond):
                     cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
                 ssa_lines.append(f"φ{phi_id} = ({cond_expr})  // {keyword}")
-                # Save snapshot of versions before block
                 pre_versions = {var: version.get(var, 0) for var in version}
-                stack.append((phi_id, pre_versions, {}))  # assigned_vars dict
+                stack.append((phi_id, pre_versions, {}))
                 phi_id += 1
                 continue
 
-            # Handle assert
             elif line.startswith("assert"):
                 condition = re.search(r"\((.*?)\)", line).group(1)
                 vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
@@ -166,7 +177,6 @@ class LoopUnrollSSAApp:
                 ssa_lines.append(f"assert({cond_expr})")
                 continue
 
-            # Handle assignment
             elif "=" in line:
                 parts = line.replace(";", "").split("=")
                 if len(parts) != 2:
@@ -180,10 +190,9 @@ class LoopUnrollSSAApp:
                 new_left = bump_version(left)
                 ssa_lines.append(f"{new_left} := {new_right}")
                 if stack:
-                    stack[-1][2][left] = version[left]  # update assigned_vars
+                    stack[-1][2][left] = version[left]
                 continue
 
-            # Handle end of block
             elif line == "}":
                 if stack:
                     cond_phi, pre_versions, assigned_vars = stack.pop()
@@ -191,10 +200,9 @@ class LoopUnrollSSAApp:
                         old_ver = pre_versions.get(var, 0)
                         if old_ver != new_ver:
                             phi_result = bump_version(var)
-                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver} : {var}_{new_ver}")
+                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver+1} : {var}_{new_ver }")
                 continue
 
-            # Handle anything else
             else:
                 ssa_lines.append(f"// Unhandled: {line}")
 
