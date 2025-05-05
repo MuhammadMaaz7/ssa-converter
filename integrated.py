@@ -10,7 +10,8 @@ def unroll_loop(code, unroll_count=2, level=0):
 
     first_line = lines[0].strip()
     if re.match(r'^\s*\w+\s*:=\s*\d+\s*;', first_line) or re.match(r'^\s*int\s+\w+\s*=\s*\d+\s*;', first_line):
-        raise ValueError("Input should start with a loop, not variable declaration")
+        # Allow non-loop code by returning early
+        return code
 
     code = code.strip()
     if code.startswith('for'):
@@ -26,7 +27,8 @@ def unroll_loop(code, unroll_count=2, level=0):
         body = match.group(2)
         init, update = "", ""
     else:
-        raise ValueError("Only for and while loops are supported")
+        # If not a loop, just return original for SSA conversion
+        return code
 
     init = init.strip()
     condition = condition.strip()
@@ -86,11 +88,11 @@ class LoopUnrollSSAApp:
         self.root = root
         root.title("Loop Unroller + SSA Converter")
 
-        tk.Label(root, text="Enter Loop Code:").pack()
+        tk.Label(root, text="Enter Code:").pack()
         self.input_box = scrolledtext.ScrolledText(root, height=12, width=100)
         self.input_box.pack()
 
-        tk.Label(root, text="Number of Unrolls:").pack()
+        tk.Label(root, text="Number of Unrolls (only for loops):").pack()
         self.unroll_entry = tk.Entry(root)
         self.unroll_entry.insert(0, "2")
         self.unroll_entry.pack()
@@ -122,7 +124,11 @@ class LoopUnrollSSAApp:
             return
 
         try:
-            unrolled = unroll_loop(code, unroll_count)
+            if code.strip().startswith(('for', 'while')):
+                unrolled = unroll_loop(code, unroll_count)
+            else:
+                unrolled = code  # Skip unrolling if not a loop
+
             self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, unrolled)
 
