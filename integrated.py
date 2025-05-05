@@ -141,7 +141,7 @@ class LoopUnrollSSAApp:
             if not line or line.startswith("//"):
                 continue
 
-            # Handle if, else if, or while
+            # Handle if / while condition
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
                 keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
@@ -150,7 +150,9 @@ class LoopUnrollSSAApp:
                 for var in set(vars_in_cond):
                     cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
                 ssa_lines.append(f"φ{phi_id} = ({cond_expr})  // {keyword}")
-                stack.append((phi_id, []))
+                # Save snapshot of versions before block
+                pre_versions = {var: version.get(var, 0) for var in version}
+                stack.append((phi_id, pre_versions, {}))  # assigned_vars dict
                 phi_id += 1
                 continue
 
@@ -178,17 +180,18 @@ class LoopUnrollSSAApp:
                 new_left = bump_version(left)
                 ssa_lines.append(f"{new_left} := {new_right}")
                 if stack:
-                    stack[-1][1].append(left)
+                    stack[-1][2][left] = version[left]  # update assigned_vars
                 continue
 
             # Handle end of block
             elif line == "}":
                 if stack:
-                    cond_phi, assigned_vars = stack.pop()
-                    for var in assigned_vars:
-                        old_ver = get_var_version(var)
-                        new_ver = bump_version(var)
-                        ssa_lines.append(f"{new_ver} := φ{cond_phi}? {old_ver}:{old_ver}")
+                    cond_phi, pre_versions, assigned_vars = stack.pop()
+                    for var, new_ver in assigned_vars.items():
+                        old_ver = pre_versions.get(var, 0)
+                        if old_ver != new_ver:
+                            phi_result = bump_version(var)
+                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver} : {var}_{new_ver}")
                 continue
 
             # Handle anything else
