@@ -10,8 +10,7 @@ def unroll_loop(code, unroll_count=2, level=0):
 
     first_line = lines[0].strip()
     if re.match(r'^\s*\w+\s*:=\s*\d+\s*;', first_line) or re.match(r'^\s*int\s+\w+\s*=\s*\d+\s*;', first_line):
-        # Allow non-loop code by returning early
-        return code
+        raise ValueError("Input should start with a loop, not variable declaration")
 
     code = code.strip()
     if code.startswith('for'):
@@ -27,8 +26,7 @@ def unroll_loop(code, unroll_count=2, level=0):
         body = match.group(2)
         init, update = "", ""
     else:
-        # If not a loop, just return original for SSA conversion
-        return code
+        raise ValueError("Only for and while loops are supported")
 
     init = init.strip()
     condition = condition.strip()
@@ -88,14 +86,9 @@ class LoopUnrollSSAApp:
         self.root = root
         root.title("Loop Unroller + SSA Converter")
 
-        tk.Label(root, text="Enter Code:").pack()
+        tk.Label(root, text="Enter Loop Code:").pack()
         self.input_box = scrolledtext.ScrolledText(root, height=12, width=100)
         self.input_box.pack()
-
-        tk.Label(root, text="Number of Unrolls (only for loops):").pack()
-        self.unroll_entry = tk.Entry(root)
-        self.unroll_entry.insert(0, "2")
-        self.unroll_entry.pack()
 
         self.process_button = tk.Button(root, text="Unroll and Convert to SSA", command=self.process)
         self.process_button.pack()
@@ -110,25 +103,12 @@ class LoopUnrollSSAApp:
 
     def process(self):
         code = self.input_box.get("1.0", tk.END).strip()
-        try:
-            unroll_count = int(self.unroll_entry.get())
-            if unroll_count < 1:
-                raise ValueError("Unroll count must be at least 1")
-        except ValueError:
-            self.unrolled_output.delete("1.0", tk.END)
-            self.unrolled_output.insert(tk.END, "Error: Invalid unroll count\n")
-            return
-
         if not code:
             self.unrolled_output.insert(tk.END, "Error: No input provided\n")
             return
 
         try:
-            if code.strip().startswith(('for', 'while')):
-                unrolled = unroll_loop(code, unroll_count)
-            else:
-                unrolled = code  # Skip unrolling if not a loop
-
+            unrolled = unroll_loop(code)
             self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, unrolled)
 
@@ -141,76 +121,79 @@ class LoopUnrollSSAApp:
             self.unrolled_output.insert(tk.END, f"Error: {str(e)}\n")
 
     def convert_to_ssa(self, raw_code):
+        ssa_lines = []
         version = {}
         phi_id = 1
         stack = []
-        current_assignments = {}
-        final_assignments = {}
 
         def get_var_version(var):
-            if var in {'true', 'false'} or var.isdigit():
-                return var
-            if var not in version:
-                version[var] = 0
-                current_assignments[var] = f"{var}_{version[var]}"
-            return current_assignments[var]
+            version.setdefault(var, 0)
+            return f"{var}_{version[var]}"
 
         def bump_version(var):
-            version[var] = version.get(var, 0) + 1
-            current_assignments[var] = f"{var}_{version[var]}"
-            return current_assignments[var]
+            version.setdefault(var, 0)
+            version[var] += 1
+            return f"{var}_{version[var]}"
 
-        ssa_lines = []
         for line in raw_code:
             line = line.strip()
+
             if not line or line.startswith("//"):
                 continue
 
+            # Handle if, else if, or while
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
                 keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
                 vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
+                cond_expr = condition
                 for var in set(vars_in_cond):
-                    condition = re.sub(rf'\b{var}\b', get_var_version(var), condition)
-                ssa_lines.append(f"\u03d5{phi_id} = ({condition})  // {keyword}")
-                stack.append((phi_id, {}, False))
+                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
+                ssa_lines.append(f"φ{phi_id} = ({cond_expr})  // {keyword}")
+                stack.append((phi_id, []))
                 phi_id += 1
                 continue
 
-            elif line.startswith("else"):
-                if stack:
-                    prev_phi_id, prev_vars, _ = stack[-1]
-                    stack[-1] = (prev_phi_id, prev_vars, True)
+            # Handle assert
+            elif line.startswith("assert"):
+                condition = re.search(r"\((.*?)\)", line).group(1)
+                vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
+                cond_expr = condition
+                for var in set(vars_in_cond):
+                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
+                ssa_lines.append(f"assert({cond_expr})")
                 continue
 
+            # Handle assignment
+            elif "=" in line:
+                parts = line.replace(";", "").split("=")
+                if len(parts) != 2:
+                    ssa_lines.append(f"// Skipped unsupported line: {line}")
+                    continue
+                left, right = map(str.strip, parts)
+                right_vars = re.findall(r"\b[a-zA-Z_]\w*\b", right)
+                new_right = right
+                for var in set(right_vars):
+                    new_right = re.sub(rf'\b{var}\b', get_var_version(var), new_right)
+                new_left = bump_version(left)
+                ssa_lines.append(f"{new_left} := {new_right}")
+                if stack:
+                    stack[-1][1].append(left)
+                continue
+
+            # Handle end of block
             elif line == "}":
                 if stack:
-                    phi_num, assigned_vars, has_else = stack.pop()
-                    for var, if_version in assigned_vars.items():
-                        prev_version_num = version[var] - 1
-                        prev_version = f"{var}_{prev_version_num}"
-                        phi_var = bump_version(var)
-                        alt_branch = f"{if_version}" if has_else else prev_version
-                        ssa_lines.append(f"{phi_var} := \u03d5{phi_num}? {if_version}:{alt_branch}")
-                        final_assignments[var] = phi_var
+                    cond_phi, assigned_vars = stack.pop()
+                    for var in assigned_vars:
+                        old_ver = get_var_version(var)
+                        new_ver = bump_version(var)
+                        ssa_lines.append(f"{new_ver} := φ{cond_phi}? {old_ver}:{old_ver}")
                 continue
 
-            elif "=" in line and ";" in line:
-                parts = line.replace(";", "").split("=")
-                if len(parts) == 2:
-                    left, right = map(str.strip, parts)
-                    vars_in_rhs = re.findall(r"\b[a-zA-Z_]\w*\b", right)
-                    for var in set(vars_in_rhs):
-                        right = re.sub(rf'\b{var}\b', get_var_version(var), right)
-                    new_left = bump_version(left)
-                    ssa_lines.append(f"{new_left} := {right}")
-                    if stack:
-                        stack[-1][1][left] = new_left
-                    final_assignments[left] = new_left
-                continue
-
+            # Handle anything else
             else:
-                ssa_lines.append(line)
+                ssa_lines.append(f"// Unhandled: {line}")
 
         return ssa_lines
 
