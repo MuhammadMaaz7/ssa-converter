@@ -2,8 +2,15 @@ import tkinter as tk
 from tkinter import scrolledtext
 import re
 from collections import defaultdict
+from smtlib import convert_to_smtlib
+
+def normalize_increments(code):
+    code = re.sub(r'(\w+)\+\+(\s*)([;,)]|$)', r'\1 = \1 + 1\2\3', code)
+    code = re.sub(r'\+\+(\w+)(\s*)([;,)]|$)', r'\1 = \1 + 1\2\3', code)
+    return code
 
 def unroll_loop(code, unroll_count=2, level=0):
+    code = normalize_increments(code)
     lines = [line.rstrip() for line in code.strip().split('\n') if line.strip()]
     if not lines:
         raise ValueError("Empty input")
@@ -75,7 +82,7 @@ def unroll_loop(code, unroll_count=2, level=0):
             cond_var = re.match(r'^\s*(\w+)\s*[<>=]', condition)
             if cond_var:
                 var = cond_var.group(1)
-                result.append(inner_indent + f"{var} = {var} + 1;")
+                # result.append(inner_indent + f"{var} = {var} + 1;")
 
         result.append(indent + "}")
 
@@ -143,10 +150,23 @@ class LoopUnrollSSAApp:
         stack = []
 
         for line in raw_code:
-            vars_in_line = re.findall(r'\b([a-zA-Z_]\w*)\b', line)
-            for var in vars_in_line:
-                if not var.isdigit():
-                    version[var] = max(version[var], 0)
+            line = line.strip()
+            # Check for variable declarations (e.g., 'int key = arr[i];')
+            decl_match = re.match(r'^\s*(int|float|double|char|long|short)\s+([\w,]+)\s*(?:=\s*(.*?))?;', line)
+            if decl_match:
+                var_type, vars_part, rhs = decl_match.groups()
+                # Split multiple variables (e.g., 'int a, b;')
+                for var in re.split(r'\s*,\s*', vars_part):
+                    var_name = var.strip()
+                    if var_name:
+                        version[var_name] = max(version[var_name], 0)
+            else:
+                # Collect variables in other lines
+                vars_in_line = re.findall(r'\b([a-zA-Z_]\w*)\b', line)
+                for var in vars_in_line:
+                    if not var.isdigit() and var not in ['if', 'else', 'while', 'for']:
+                        version[var] = max(version[var], 0)
+
 
         def get_var_version(var):
             return f"{var}_{version[var]}" if var in version else var
@@ -161,7 +181,24 @@ class LoopUnrollSSAApp:
             line = line.strip()
             if not line or line.startswith("//"):
                 continue
-
+            
+            decl_match = re.match(r'^\s*(int|float|double|char|long|short)\s+([\w,]+)\s*(?:=\s*(.*?))?;', line)
+            if decl_match:
+                var_type, vars_part, rhs = decl_match.groups()
+                vars_decl = re.split(r'\s*,\s*', vars_part)
+                for var in vars_decl:
+                    var_name = var.strip()
+                    if rhs and '=' in line:
+                        # Process assignment part
+                        rhs_clean = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), rhs)
+                        new_var = bump_version(var_name)
+                        ssa_lines.append(f"{new_var} = {rhs_clean}")
+                    else:
+                        # Declaration without assignment
+                        new_var = bump_version(var_name)
+                        ssa_lines.append(f"{new_var} = ?")  # Unknown initial value
+                continue
+            
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
                 condition = re.search(r"\((.*?)\)", line).group(1)
                 # Replace array names with latest versions
@@ -175,16 +212,19 @@ class LoopUnrollSSAApp:
                 left, right = map(str.strip, line.split("=", 1))
                 right = right.rstrip(";")
 
+                left_clean = re.sub(r'^\s*(int|float|double|char|long|short)\s+', '', left).strip()
+
                 # Array assignment (left side has [])
                 if '[' in left:
-                    array_match = re.match(r'(\w+)\s*\[\s*([^\]]+)\s*\]', left)
+                    array_match = re.match(r'(\w+)\s*\[\s*([^\]]+)\s*\]', left_clean)
                     if array_match:
                         array_name, index = array_match.groups()
+                        index_clean = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), index)
                         # Bump array version
                         new_version = bump_version(array_name)
                         # Update right side variables
                         updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
-                        ssa_lines.append(f"{new_version} = {updated_right}")
+                        ssa_lines.append(f"{new_version}[{index_clean}] = {updated_right}")
                         if stack:
                             stack[-1][3].add(array_name)  # Track array modification
                         continue
@@ -193,10 +233,10 @@ class LoopUnrollSSAApp:
                 else:
                     # Update right side variables
                     updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
-                    new_left = bump_version(left)
-                    ssa_lines.append(f"{new_left} := {updated_right}")
+                    new_left = bump_version(left_clean)
+                    ssa_lines.append(f"{new_left} = {updated_right}")
                     if stack:
-                        stack[-1][2][left] = version[left]  # Track scalar modification
+                        stack[-1][2][left_clean] = version[left_clean]  # Track scalar modification
                     continue
 
             elif line == "}":
