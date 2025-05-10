@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import scrolledtext
 import re
+from collections import defaultdict
 
 def unroll_loop(code, unroll_count=2, level=0):
     lines = [line.rstrip() for line in code.strip().split('\n') if line.strip()]
@@ -137,16 +138,22 @@ class LoopUnrollSSAApp:
 
     def convert_to_ssa(self, raw_code):
         ssa_lines = []
-        version = {}
+        version = defaultdict(int)
         phi_id = 1
         stack = []
 
+        for line in raw_code:
+            vars_in_line = re.findall(r'\b([a-zA-Z_]\w*)\b', line)
+            for var in vars_in_line:
+                if not var.isdigit():
+                    version[var] = max(version[var], 0)
+
         def get_var_version(var):
-            version.setdefault(var, 0)
-            return f"{var}_{version[var]}"
+            return f"{var}_{version[var]}" if var in version else var
 
         def bump_version(var):
-            version.setdefault(var, 0)
+            if var.isdigit():
+                return var
             version[var] += 1
             return f"{var}_{version[var]}"
 
@@ -156,52 +163,60 @@ class LoopUnrollSSAApp:
                 continue
 
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
-                keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
-                vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
-                cond_expr = condition
-                for var in set(vars_in_cond):
-                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
-                ssa_lines.append(f"φ{phi_id} = ({cond_expr})  // {keyword}")
-                pre_versions = {var: version.get(var, 0) for var in version}
-                stack.append((phi_id, pre_versions, {}))
+                # Replace array names with latest versions
+                updated_cond = re.sub(r'(\w+)(\[\w+\])', lambda m: f"{get_var_version(m.group(1))}{m.group(2)}", condition)
+                ssa_lines.append(f"φ{phi_id} = ({updated_cond})")
+                stack.append((phi_id, dict(version), {}, set()))
                 phi_id += 1
                 continue
 
-            elif line.startswith("assert"):
-                condition = re.search(r"\((.*?)\)", line).group(1)
-                vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
-                cond_expr = condition
-                for var in set(vars_in_cond):
-                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
-                ssa_lines.append(f"assert({cond_expr})")
-                continue
+            if "=" in line:
+                left, right = map(str.strip, line.split("=", 1))
+                right = right.rstrip(";")
 
-            elif "=" in line:
-                parts = line.replace(";", "").split("=")
-                if len(parts) != 2:
-                    ssa_lines.append(f"// Skipped unsupported line: {line}")
+                # Array assignment (left side has [])
+                if '[' in left:
+                    array_match = re.match(r'(\w+)\s*\[\s*([^\]]+)\s*\]', left)
+                    if array_match:
+                        array_name, index = array_match.groups()
+                        # Bump array version
+                        new_version = bump_version(array_name)
+                        # Update right side variables
+                        updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
+                        ssa_lines.append(f"{new_version} = {updated_right}")
+                        if stack:
+                            stack[-1][3].add(array_name)  # Track array modification
+                        continue
+
+                # Scalar assignment (temp = ...)
+                else:
+                    # Update right side variables
+                    updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
+                    new_left = bump_version(left)
+                    ssa_lines.append(f"{new_left} := {updated_right}")
+                    if stack:
+                        stack[-1][2][left] = version[left]  # Track scalar modification
                     continue
-                left, right = map(str.strip, parts)
-                right_vars = re.findall(r"\b[a-zA-Z_]\w*\b", right)
-                new_right = right
-                for var in set(right_vars):
-                    new_right = re.sub(rf'\b{var}\b', get_var_version(var), new_right)
-                new_left = bump_version(left)
-                ssa_lines.append(f"{new_left} := {new_right}")
-                if stack:
-                    stack[-1][2][left] = version[left]
-                continue
 
             elif line == "}":
                 if stack:
-                    cond_phi, pre_versions, assigned_vars = stack.pop()
+                    cond_phi, pre_versions, assigned_vars, assigned_arrays = stack.pop()
+                    
+                    # Merge scalar variables
                     for var, new_ver in assigned_vars.items():
                         old_ver = pre_versions.get(var, 0)
                         if old_ver != new_ver:
-                            phi_result = bump_version(var)
-                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver+1} : {var}_{new_ver }")
-                continue
+                            phi_var = bump_version(var)
+                            ssa_lines.append(f"{phi_var} = φ{cond_phi} ? {var}_{new_ver} : {var}_{old_ver}")
+                    
+                    # Merge arrays
+                    for array_name in assigned_arrays:
+                        old_ver = pre_versions.get(array_name, 0)
+                        current_ver = version[array_name]
+                        if old_ver != current_ver:
+                            phi_var = bump_version(array_name)
+                            ssa_lines.append(f"{phi_var} = φ{cond_phi} ? {array_name}_{current_ver} : {array_name}_{old_ver}")
 
             else:
                 ssa_lines.append(f"// Unhandled: {line}")
