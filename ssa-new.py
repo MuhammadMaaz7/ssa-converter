@@ -97,12 +97,10 @@ def unroll_code(code, unroll_count, indent_level=0):
 
     return "\n".join(lines)
 
-
 import re
-from copy import deepcopy
 
 class SSAConverter:
-    def __init__(self, array_length=5):
+    def __init__(self, array_length=10):
         self.var_versions = {}  # Tracks current version of each variable
         self.array_versions = {}  # Tracks current version of each array element
         self.current_block = []  # Stores the SSA form
@@ -110,8 +108,7 @@ class SSAConverter:
         self.context_stack = []  # Stack for tracking nested blocks
         self.array_length = array_length
         self.if_else_stack = []  # Stack for tracking if-else conditions
-        self.debug = False  # Debug flag
-    
+        
     def get_var_version(self, var):
         """Get current version number of a variable"""
         return self.var_versions.get(var, 0)
@@ -122,154 +119,96 @@ class SSAConverter:
         self.var_versions[var] = count
         return f"{var}_{count}"
     
-    def get_array_version(self, index):
+    def get_array_version(self, array_name, index):
         """Get current version number of an array element"""
-        return self.array_versions.get(str(index), 0)
+        index_key = f"{array_name}_{index}"
+        return self.array_versions.get(index_key, 0)
     
-    def fresh_array(self, index):
+    def fresh_array(self, index, array_name="arr"):
         """Create a new version of an array element"""
-        index_str = str(index)
-        count = self.get_array_version(index_str) + 1
-        self.array_versions[index_str] = count
-        return f"arr{index_str}_{count}"
+        index_key = f"{array_name}_{index}"
+        count = self.get_array_version(array_name, index) + 1
+        self.array_versions[index_key] = count
+        return f"{array_name}{index}_{count}"
     
-    def eval_expr(self, expr):
-        """Evaluate a simple expression with variable substitution"""
-        try:
-            # Replace array accesses with temporary variables
-            expr = re.sub(r'arr\[(\d+)\]', lambda m: f'arr{m.group(1)}', expr)
+    def process_variable_references(self, expr):
+        """Process just the variable references in an expression - always use latest version"""
+        if not expr:
+            return expr
             
-            # Create a context with variable values
-            ctx = {}
-            for var, ver in self.var_versions.items():
-                if var.isalpha():
-                    try:
-                        ctx[var] = int(ver)
-                    except:
-                        pass
-            
-            # Add array elements to context
-            for idx, ver in self.array_versions.items():
-                if idx.isdigit():
-                    try:
-                        ctx[f'arr{idx}'] = int(ver)
-                    except:
-                        pass
-                        
-            return eval(expr, {}, ctx)
-        except:
-            return None
-    
-    def resolve_array_index(self, index_expr):
-        """Resolve array index expressions to a specific array element"""
-        # Replace variables with their current versions
-        for var, ver in sorted(self.var_versions.items(), key=lambda x: (-len(x[0]), x[0])):
-            if var.isalpha():  # Only match whole variable names
-                pattern = rf'\b{var}\b'
-                index_expr = re.sub(pattern, f"{var}_{ver}", index_expr)
-        
-        # Try to evaluate the expression if it's simple
-        try:
-            result = self.eval_expr(index_expr)
-            if result is not None and 0 <= result < self.array_length:
-                return str(result)
-        except:
-            pass
-        
-        return index_expr
-    
-    def process_array_access(self, array_access):
-        """Process array access like arr[j] or arr[j+1]"""
-        if not array_access.startswith('arr['):
-            return array_access
-        
-        # Extract the index expression from arr[index]
-        index_expr = array_access[4:-1]
-        
-        # Try to resolve to a specific array element
-        resolved_index = self.resolve_array_index(index_expr)
-        
-        # If we can resolve to a numeric index, use it directly
-        if resolved_index.isdigit():
-            index_value = int(resolved_index)
-            if 0 <= index_value < self.array_length:
-                version = self.get_array_version(index_value)
-                return f"arr{index_value}_{version}"
-        
-        # Otherwise, keep the original expression but with versioned variables
-        return f"arr[{resolved_index}]"
-    
-    def process_expression(self, expr):
-        """Process expressions, handling variable versions and array access"""
-        # Handle array accesses first
-        expr = re.sub(
-            r'arr\[([^\]]+)\]',
-            lambda m: self.process_array_access(f"arr[{m.group(1)}]"),
-            expr
-        )
-        
-        # Then handle variables in expressions
+        result = expr
+        # Sort variables by length in descending order to avoid partial matches
         for var in sorted(self.var_versions.keys(), key=lambda x: -len(x)):
             if var.isalpha():  # Only match whole variable names
                 pattern = rf'\b{var}\b'
-                expr = re.sub(pattern, f"{var}_{self.get_var_version(var)}", expr)
+                version = self.get_var_version(var)
+                result = re.sub(pattern, f"{var}_{version}", result)
                 
-        return expr
+        return result
     
-    def handle_increment_decrement(self, line):
-        """Handle postfix/prefix increment/decrement operations"""
-        # Check for postfix increment/decrement: var++ or var--
-        postfix_match = re.match(r'(\w+)(\+\+|--)', line)
-        if postfix_match:
-            var, op = postfix_match.groups()
-            operator = '+' if op == '++' else '-'
-            new_var = self.fresh_var(var)
-            curr_var = f"{var}_{self.get_var_version(var) - 1}"  # Get previous version
-            self.current_block.append(f"{new_var} = {curr_var} {operator} 1")
-            return True
+    def process_array_access(self, array_access):
+        """Process array access like arr[j] with proper versioning"""
+        array_match = re.match(r'(\w+)\[(.*)\]', array_access)
+        if not array_match:
+            return array_access
         
-        # Check for prefix increment/decrement: ++var or --var
-        prefix_match = re.match(r'(\+\+|--)(\w+)', line)
-        if prefix_match:
-            op, var = prefix_match.groups()
-            operator = '+' if op == '++' else '-'
-            new_var = self.fresh_var(var)
-            curr_var = f"{var}_{self.get_var_version(var) - 1}"  # Get previous version
-            self.current_block.append(f"{new_var} = {curr_var} {operator} 1")
-            return True
+        array_name, index_expr = array_match.groups()
+        
+        # Process the index expression first
+        processed_index = self.process_variable_references(index_expr)
+        
+        # Try to resolve to a numeric index
+        try:
+            # For simple numeric indices
+            if processed_index.isdigit():
+                index_value = int(processed_index)
+                if 0 <= index_value < self.array_length:
+                    version = self.get_array_version(array_name, index_value)
+                    return f"{array_name}{index_value}_{version}"
             
-        return False
+            # For j+1 style expressions
+            plus_match = re.match(r'(\w+)_(\d+)\s*\+\s*(\d+)', processed_index)
+            if plus_match:
+                var_name, var_version, offset = plus_match.groups()
+                # For simple cases like j_1 + 1, return arr[j+1] properly versioned
+                if var_name.isalpha() and var_version.isdigit() and offset.isdigit():
+                    # We can't determine the exact index at compile time in general case
+                    # But for j+1 pattern in bubble sort, we know it's accessing the next element
+                    return f"{array_name}[{var_name}_{var_version} + {offset}]"
+        except:
+            pass
+        
+        # If we can't resolve, use symbolic form with proper variable versioning
+        return f"{array_name}[{processed_index}]"
     
-    def create_phi_node(self, condition_id, var, true_ver, false_ver):
-        """Create a phi node for a variable"""
-        if true_ver == false_ver:
-            return None
-            
-        phi_var = self.fresh_var(var)
-        self.current_block.append(f"{phi_var} = φ{condition_id} ? {var}_{true_ver} : {var}_{false_ver}")
-        return phi_var
+    def process_expression(self, expr):
+        """Process expressions, handling variable versions and array access"""
+        if not expr:
+            return expr
+        
+        # Handle array accesses first
+        array_pattern = r'(\w+)\[([^\]]+)\]'
+        
+        # We need to find all array accesses and process them
+        matches = list(re.finditer(array_pattern, expr))
+        
+        # Process from right to left to avoid messing up the indices
+        result = expr
+        for match in reversed(matches):
+            array_access = match.group(0)
+            processed_access = self.process_array_access(array_access)
+            start, end = match.span()
+            result = result[:start] + processed_access + result[end:]
+        
+        # Then handle variables in expressions
+        return self.process_variable_references(result)
     
-    def create_array_phi_node(self, condition_id, index, true_ver, false_ver):
-        """Create a phi node for an array element"""
-        if true_ver == false_ver:
-            return None
-            
-        new_ver = max(true_ver, false_ver) + 1
-        self.array_versions[str(index)] = new_ver
-        self.current_block.append(f"arr{index}_{new_ver} = φ{condition_id} ? arr{index}_{true_ver} : arr{index}_{false_ver}")
-        return f"arr{index}_{new_ver}"
-    
-    def process_if_condition(self, condition):
-        """Process an if condition, creating a phi node"""
+    def start_if_block(self, condition):
+        """Start an if block, saving context"""
         processed_condition = self.process_expression(condition)
         phi_id = self.phi_counter
         self.phi_counter += 1
         self.current_block.append(f"φ{phi_id} = {processed_condition}")
-        return phi_id
-    
-    def start_if_block(self, condition):
-        """Start an if block, saving context"""
-        phi_id = self.process_if_condition(condition)
         
         # Save current state
         context = {
@@ -298,7 +237,7 @@ class SSAConverter:
         if_context = self.context_stack[-1]
         if_context['is_else'] = True
         
-        # Save if branch versions
+        # Save if branch versions before switching to else branch
         if_data = self.if_else_stack[-1]
         if_data['if_vars'] = {var: ver for var, ver in self.var_versions.items()}
         if_data['if_arrays'] = {idx: ver for idx, ver in self.array_versions.items()}
@@ -308,7 +247,7 @@ class SSAConverter:
         self.array_versions = {idx: ver for idx, ver in if_context['arrays'].items()}
     
     def end_block(self):
-        """End a block (if, else, for, while)"""
+        """End a block (if, else) with proper phi node creation"""
         if not self.context_stack:
             return
             
@@ -316,39 +255,93 @@ class SSAConverter:
         phi_id = context.get('phi_id')
         
         if context.get('is_else'):
-            # End of else block - create phi nodes
+            # End of else block - create comprehensive phi nodes
             if_data = self.if_else_stack.pop()
-            if phi_id != if_data['phi_id']:
-                if self.debug:
-                    self.current_block.append(f"// WARNING: phi_id mismatch {phi_id} vs {if_data['phi_id']}")
             
             # Process all variables modified in either branch
             all_vars = set(if_data['if_vars'].keys()) | set(self.var_versions.keys())
             for var in all_vars:
                 if_ver = if_data['if_vars'].get(var, context['vars'].get(var, 0))
                 else_ver = self.var_versions.get(var, context['vars'].get(var, 0))
+                
+                # Only create phi node if versions differ
                 if if_ver != else_ver:
-                    self.create_phi_node(phi_id, var, if_ver, else_ver)
+                    new_var = self.fresh_var(var)
+                    self.current_block.append(f"{new_var} = φ{phi_id} ? {var}_{if_ver} : {var}_{else_ver}")
             
-            # Process arrays
-            all_indices = set(if_data.get('if_arrays', {}).keys()) | set(self.array_versions.keys())
-            for idx in all_indices:
-                if_ver = if_data.get('if_arrays', {}).get(idx, context['arrays'].get(idx, 0))
-                else_ver = self.array_versions.get(idx, context['arrays'].get(idx, 0))
-                if if_ver != else_ver:
-                    self.create_array_phi_node(phi_id, idx, if_ver, else_ver)
+            # Process arrays - make phi nodes for each potentially modified array element
+            all_indices = set(if_data['if_arrays'].keys()) | set(self.array_versions.keys())
+            for idx_key in all_indices:
+                if '_' in idx_key:
+                    array_name, idx = idx_key.split('_')
+                    if_ver = if_data['if_arrays'].get(idx_key, context['arrays'].get(idx_key, 0))
+                    else_ver = self.array_versions.get(idx_key, context['arrays'].get(idx_key, 0))
+                    
+                    # Only create phi node if versions differ
+                    if if_ver != else_ver:
+                        # Create new version for this array element
+                        new_ver = max(if_ver, else_ver) + 1
+                        self.array_versions[idx_key] = new_ver
+                        self.current_block.append(
+                            f"{array_name}{idx}_{new_ver} = φ{phi_id} ? {array_name}{idx}_{if_ver} : {array_name}{idx}_{else_ver}"
+                        )
         else:
-            # End of if block without else - create phi nodes
+            # End of if block without else - create phi nodes comparing with state before if
             for var, before_ver in context['vars'].items():
                 after_ver = self.var_versions.get(var, before_ver)
                 if before_ver != after_ver:
-                    self.create_phi_node(phi_id, var, after_ver, before_ver)
+                    new_var = self.fresh_var(var)
+                    self.current_block.append(f"{new_var} = φ{phi_id} ? {var}_{after_ver} : {var}_{before_ver}")
             
-            # Process arrays
-            for idx, before_ver in context['arrays'].items():
-                after_ver = self.array_versions.get(idx, before_ver)
-                if before_ver != after_ver:
-                    self.create_array_phi_node(phi_id, idx, after_ver, before_ver)
+            # Create phi nodes for array elements
+            for idx_key, before_ver in context['arrays'].items():
+                after_ver = self.array_versions.get(idx_key, before_ver)
+                if before_ver != after_ver and '_' in idx_key:
+                    array_name, idx = idx_key.split('_')
+                    new_ver = max(after_ver, before_ver) + 1
+                    self.array_versions[idx_key] = new_ver
+                    self.current_block.append(
+                        f"{array_name}{idx}_{new_ver} = φ{phi_id} ? {array_name}{idx}_{after_ver} : {array_name}{idx}_{before_ver}"
+                    )
+    
+    def handle_assignment(self, lhs, rhs):
+        """Handle variable or array assignment"""
+        rhs = self.process_expression(rhs)
+        
+        # Handle array assignment: arr[i] = value
+        if '[' in lhs and ']' in lhs:
+            array_match = re.match(r'(\w+)\[(.*)\]', lhs)
+            if array_match:
+                array_name, idx_expr = array_match.groups()
+                processed_idx = self.process_variable_references(idx_expr)
+                
+                # If index is a simple number
+                if processed_idx.isdigit():
+                    idx = int(processed_idx)
+                    if 0 <= idx < self.array_length:
+                        new_arr = self.fresh_array(idx, array_name)
+                        self.current_block.append(f"{new_arr} = {rhs}")
+                    else:
+                        # Out of bounds or complex index
+                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+                else:
+                    # For expressions like j_1, try to resolve
+                    j_match = re.match(r'(\w+)_(\d+)', processed_idx)
+                    if j_match and j_match.group(1).isalpha():
+                        # We can't determine the actual value at compile time
+                        # So we need to represent it symbolically but preserve SSA form
+                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+                    elif "+" in processed_idx:
+                        # Handle j+1 type indices similarly
+                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+                    else:
+                        # Other symbolic indices
+                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+        else:
+            # Regular variable assignment
+            var = lhs.strip()
+            new_var = self.fresh_var(var)
+            self.current_block.append(f"{new_var} = {rhs}")
     
     def process_line(self, line):
         """Process a single line of code"""
@@ -358,7 +351,7 @@ class SSAConverter:
             
         # Remove trailing semicolon
         if line.endswith(';'):
-            line = line[:-1].rstrip()
+            line = line[:-1].strip()
             
         # Skip empty lines after removing semicolon
         if not line:
@@ -380,103 +373,122 @@ class SSAConverter:
         if line == '}':
             self.end_block()
             return
+        
+        # Handle for loops - convert to if condition
+        for_match = re.match(r'for\s*\((.*?);(.*?);(.*?)\)', line)
+        if for_match:
+            init, cond, incr = for_match.groups()
+            # Process initialization first
+            if init:
+                self.process_line(init)
+            # Then create an if block for the condition
+            if cond:
+                self.start_if_block(cond)
+            # We'll process the increment later
+            return
             
-        # Handle increment/decrement operations
-        if self.handle_increment_decrement(line):
+        # Handle variable increment/decrement
+        inc_match = re.match(r'(\w+)(\+\+|--)', line)
+        if inc_match:
+            var, op = inc_match.groups()
+            value = "1" if op == "++" else "-1"
+            current_var = f"{var}_{self.get_var_version(var)}"
+            new_var = self.fresh_var(var)
+            self.current_block.append(f"{new_var} = {current_var} + {value}")
             return
             
         # Handle variable declarations with initialization
         if line.startswith('int ') or line.startswith('float ') or line.startswith('double '):
-            parts = re.split(r'\s*=\s*', line[line.find(' ')+1:], 1)
-            var = parts[0].strip()
-            if len(parts) > 1:  # Has initialization
-                rhs = parts[1].strip()
-                new_var = self.fresh_var(var)
-                processed_rhs = self.process_expression(rhs)
-                self.current_block.append(f"{new_var} = {processed_rhs}")
-            else:  # Just declaration
-                self.fresh_var(var)  # Create first version
+            # Split by commas for multiple declarations
+            declarations = line[line.find(' ')+1:].split(',')
+            for decl in declarations:
+                decl = decl.strip()
+                parts = re.split(r'\s*=\s*', decl, 1)
+                var = parts[0].strip()
+                if len(parts) > 1:  # Has initialization
+                    rhs = parts[1].strip()
+                    new_var = self.fresh_var(var)
+                    processed_rhs = self.process_expression(rhs)
+                    self.current_block.append(f"{new_var} = {processed_rhs}")
+                else:  # Just declaration with implicit 0 initialization
+                    new_var = self.fresh_var(var) 
+                    self.current_block.append(f"{new_var} = 0")
             return
             
         # Handle variable assignments
         if '=' in line and not line.startswith('if ') and not line.startswith('while '):
-            lhs, rhs = re.split(r'\s*=\s*', line, 1)
-            lhs = lhs.strip()
-            rhs = rhs.strip()
-            
-            # Handle array assignments
-            if lhs.startswith('arr['):
-                # Extract index expression
-                idx_expr = lhs[4:-1]
-                resolved_idx = self.resolve_array_index(idx_expr)
-                
-                # If we have a simple numeric index
-                if resolved_idx.isdigit():
-                    idx = int(resolved_idx)
-                    if 0 <= idx < self.array_length:
-                        new_arr = self.fresh_array(idx)
-                        processed_rhs = self.process_expression(rhs)
-                        self.current_block.append(f"{new_arr} = {processed_rhs}")
-                    else:
-                        # Out of bounds array access
-                        processed_idx = self.process_expression(idx_expr)
-                        processed_rhs = self.process_expression(rhs)
-                        self.current_block.append(f"arr[{processed_idx}] = {processed_rhs}")
-                else:
-                    # More complex index expression
-                    processed_idx = self.process_expression(idx_expr)
-                    processed_rhs = self.process_expression(rhs)
-                    self.current_block.append(f"arr[{processed_idx}] = {processed_rhs}")
-                return
-                
-            # Regular variable assignment
-            var = lhs.split()[0] if ' ' in lhs else lhs
-            new_var = self.fresh_var(var)
-            processed_rhs = self.process_expression(rhs)
-            self.current_block.append(f"{new_var} = {processed_rhs}")
-            return
-            
-        # Handle for loops - not unrolling, just initial assignment
-        for_match = re.match(r'for\s*\(\s*(.*?)\s*;\s*(.*?)\s*;\s*(.*?)\s*\)', line)
-        if for_match:
-            init, cond, incr = for_match.groups()
-            if init:
-                self.process_line(init)
-            return
-            
-        # Handle while loops
-        while_match = re.match(r'while\s*\((.*)\)', line)
-        if while_match:
-            condition = while_match.group(1)
-            self.process_if_condition(condition)  # Just create phi node for condition
+            parts = re.split(r'\s*=\s*', line, 1)
+            if len(parts) == 2:
+                lhs, rhs = parts
+                self.handle_assignment(lhs.strip(), rhs.strip())
             return
             
         # Handle return statements
         if line.startswith('return '):
-            ret_val = line[7:].strip()
-            processed_ret = self.process_expression(ret_val)
-            self.current_block.append(f"return {processed_ret}")
+            expr = line[7:].strip()
+            processed_expr = self.process_expression(expr)
+            self.current_block.append(f"return {processed_expr}")
             return
-            
-        # Other statements are passed through
-        self.current_block.append(f"// Unprocessed: {line}")
-    
-    def get_ssa(self):
-        """Get the SSA form"""
-        return '\n'.join(self.current_block)
     
     def initialize_array(self):
         """Initialize array elements with version 0"""
         for i in range(self.array_length):
-            self.array_versions[str(i)] = 0
+            index_key = f"arr_{i}"
+            self.array_versions[index_key] = 0
+            self.current_block.append(f"arr{i}_0 = arr[{i}]  // Initial array element")
+    
+    def get_ssa(self):
+        """Get the complete SSA form"""
+        return '\n'.join(self.current_block)
 
 def convert_to_ssa(code, array_length=10):
-    """Convert code to SSA form"""
+    """Convert code to SSA form with improved handling"""
+    import re
     converter = SSAConverter(array_length)
     converter.initialize_array()
     
     # Split code into lines and process each line
+    lines = []
+    in_for_loop = False
+    for_cond = ""
+    for_incr = ""
+    
+    # First pass: handle for loops by extracting their components
     for line in code.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Extract for loop components
+        for_match = re.match(r'for\s*\((.*?);(.*?);(.*?)\)\s*{?', line)
+        if for_match:
+            init, cond, incr = for_match.groups()
+            in_for_loop = True
+            for_cond = cond
+            for_incr = incr
+            # Add initialization
+            if init:
+                lines.append(init + ";")
+            # Add if condition
+            lines.append(f"if ({cond}) {{")
+            continue
+            
+        # Handle end of for loop block
+        if in_for_loop and line == "}":
+            # Insert increment before closing brace
+            lines.append(for_incr + ";")
+            # Create a goto-like structure with another if
+            lines.append(f"if ({for_cond}) {{")
+            # Loop body would go here in real implementation
+            lines.append("}")
+            in_for_loop = False
+            lines.append("}")
+            continue
+            
+        lines.append(line)
+    
+    # Second pass: process the modified code
+    for line in lines:
         converter.process_line(line)
         
     return converter.get_ssa()

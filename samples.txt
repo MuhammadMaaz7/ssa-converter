@@ -60,6 +60,157 @@ for (i = 0; i < n - 1; i++) {
     }
 }
 
+// Unrolled version for first two iterations of outer loop and inner loop
+i = 0;
+if (i < n - 1) {
+    j = 0;
+    if (j < n - i - 1) {
+        if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+            arr[j] = arr[j + 1];
+            arr[j + 1] = temp;
+        };
+    }
+    j++;
+    if (j < n - i - 1) {
+        if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+            arr[j] = arr[j + 1];
+            arr[j + 1] = temp;
+        };
+    }
+    j++;
+}
+i++;
+if (i < n - 1) {
+    j = 0;
+    if (j < n - i - 1) {
+        if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+            arr[j] = arr[j + 1];
+            arr[j + 1] = temp;
+        };
+    }
+    j++;
+    if (j < n - i - 1) {
+        if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+            arr[j] = arr[j + 1];
+            arr[j + 1] = temp;
+        };
+    }
+    j++;
+}
+i++;
+
+
+//SSA
+// Start of SSA
+temp_0 = 0
+i_0 = 0
+
+// First outer loop iteration check
+φ1 = i_0 < n - 1
+
+// First outer loop body
+j_0 = 0
+
+// First inner loop iteration check
+φ2 = j_0 < n - i_0 - 1
+
+// First inner loop body - first comparison and swap
+φ3 = arr0_0 > arr1_0  // Compare arr[0] and arr[1]
+
+// First potential swap
+temp_1 = arr0_0
+arr0_1 = φ3 ? arr1_0 : arr0_0
+arr1_1 = φ3 ? temp_1 : arr1_0
+
+j_1 = j_0 + 1  // j = 1
+
+// Second inner loop iteration check
+φ4 = j_1 < n - i_0 - 1
+
+// Second inner loop body - second comparison and swap
+φ5 = arr1_1 > arr2_0  // Compare arr[1] and arr[2]
+
+// Second potential swap
+temp_2 = arr1_1
+arr1_2 = φ5 ? arr2_0 : arr1_1
+arr2_1 = φ5 ? temp_2 : arr2_0
+
+j_2 = j_1 + 1  // j = 2
+
+// Third inner loop iteration check
+φ6 = j_2 < n - i_0 - 1
+
+// Third inner loop body - third comparison and swap
+φ7 = arr2_1 > arr3_0  // Compare arr[2] and arr[3]
+
+// Third potential swap
+temp_3 = arr2_1
+arr2_2 = φ7 ? arr3_0 : arr2_1
+arr3_1 = φ7 ? temp_3 : arr3_0
+
+j_3 = j_2 + 1  // j = 3
+
+// Merge point for inner loop (first outer iteration)
+j_4 = φ1 ? (φ2 ? (φ4 ? (φ6 ? j_3 : j_2) : j_1) : j_0) : j_0
+arr0_2 = φ1 ? arr0_1 : arr0_0
+arr1_3 = φ1 ? (φ2 ? (φ4 ? arr1_2 : arr1_1) : arr1_0) : arr1_0
+arr2_3 = φ1 ? (φ2 ? (φ4 ? (φ6 ? arr2_2 : arr2_1) : arr2_0) : arr2_0) : arr2_0
+arr3_2 = φ1 ? (φ2 ? (φ4 ? (φ6 ? arr3_1 : arr3_0) : arr3_0) : arr3_0) : arr3_0
+
+i_1 = i_0 + 1  // i = 1
+
+// Second outer loop iteration check
+φ8 = i_1 < n - 1
+
+// Second outer loop body
+j_5 = 0
+
+// First inner loop iteration check of second outer loop
+φ9 = j_5 < n - i_1 - 1
+
+// First inner loop body of second outer loop - first comparison and swap
+φ10 = arr0_2 > arr1_3  // Compare arr[0] and arr[1]
+
+// First potential swap of second outer loop
+temp_4 = arr0_2
+arr0_3 = φ10 ? arr1_3 : arr0_2
+arr1_4 = φ10 ? temp_4 : arr1_3
+
+j_6 = j_5 + 1  // j = 1
+
+// Second inner loop iteration check of second outer loop
+φ11 = j_6 < n - i_1 - 1
+
+// Second inner loop body of second outer loop - second comparison and swap
+φ12 = arr1_4 > arr2_3  // Compare arr[1] and arr[2]
+
+// Second potential swap of second outer loop
+temp_5 = arr1_4
+arr1_5 = φ12 ? arr2_3 : arr1_4
+arr2_4 = φ12 ? temp_5 : arr2_3
+
+j_7 = j_6 + 1  // j = 2
+
+// Merge point for inner loop (second outer iteration)
+j_8 = φ8 ? (φ9 ? (φ11 ? j_7 : j_6) : j_5) : j_4
+arr0_4 = φ8 ? arr0_3 : arr0_2
+arr1_6 = φ8 ? (φ9 ? (φ11 ? arr1_5 : arr1_4) : arr1_3) : arr1_3
+arr2_5 = φ8 ? (φ9 ? (φ11 ? arr2_4 : arr2_3) : arr2_3) : arr2_3
+arr3_3 = φ8 ? arr3_2 : arr3_2  // arr[3] wouldn't change in this iteration
+
+i_2 = i_1 + 1  // i = 2
+
+// Final state of array after bubble sort iterations
+arr0_final = arr0_4
+arr1_final = arr1_6
+arr2_final = arr2_5
+arr3_final = arr3_3
+
+
 //insertion sort
 for (int i = 1; i < n; ++i) {
     int key = arr[i];
@@ -99,6 +250,33 @@ for (int i = 0; i < n - 1; i++) {
         }
     }
     return arr;
+
+//unrolled
+int j, temp = 0;
+j = 0;
+if (j < n - 1) {
+    if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+    arr[j] = arr[j + 1];
+    arr[j + 1] = temp;
+    }
+        else {
+            arr[j] = j;
+    };
+}
+j++;
+if (j < n - 1) {
+    if (arr[j] > arr[j + 1]) {
+            temp = arr[j];
+    arr[j] = arr[j + 1];
+    arr[j + 1] = temp;
+    }
+        else {
+            arr[j] = j;
+    };
+}
+j++;
+return arr;
 
 //SSA
 assume for arr[3] = arr0, arr1, arr2
