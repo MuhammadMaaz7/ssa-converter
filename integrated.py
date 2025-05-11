@@ -74,7 +74,7 @@ def unroll_loop(code, unroll_count=2, level=0):
             cond_var = re.match(r'^\s*(\w+)\s*[<>=]', condition)
             if cond_var:
                 var = cond_var.group(1)
-                result.append(inner_indent + f"{var} = {var} + 1;")
+                # result.append(inner_indent + f"{var} = {var} + 1;")
 
         result.append(indent + "}")
 
@@ -155,6 +155,13 @@ class LoopUnrollSSAApp:
             if not line or line.startswith("//"):
                 continue
 
+            inc_dec_match = re.match(r'^\s*(\+\+|\-\-)?(\w+)(\+\+|\-\-)?\s*;?$', line)
+            if inc_dec_match:
+                pre_op, var, post_op = inc_dec_match.groups()
+                if pre_op or post_op:
+                    op = pre_op[0] if pre_op else post_op[0]  # Get operator
+                    line = f"{var} = {var} {op}1"  # Convert to assignment
+
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
                 keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
@@ -178,6 +185,11 @@ class LoopUnrollSSAApp:
                 continue
 
             elif "=" in line:
+                # Check for type declarations (e.g., int x = 5;)
+                type_decl_match = re.match(r'^\s*(int|float|double)\s+(\w+)\s*=\s*(.*?)\s*;?$', line.strip())
+                if type_decl_match:
+                    _, var_name, value = type_decl_match.groups()
+                    line = f"{var_name} = {value}"
                 parts = line.replace(";", "").split("=")
                 if len(parts) != 2:
                     ssa_lines.append(f"// Skipped unsupported line: {line}")
@@ -200,7 +212,7 @@ class LoopUnrollSSAApp:
                         old_ver = pre_versions.get(var, 0)
                         if old_ver != new_ver:
                             phi_result = bump_version(var)
-                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver+1} : {var}_{new_ver }")
+                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{new_ver} : {var}_{old_ver }")
                 continue
 
             else:
