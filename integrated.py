@@ -1,16 +1,8 @@
 import tkinter as tk
 from tkinter import scrolledtext
 import re
-from collections import defaultdict
-from smtlib import convert_to_smtlib
-
-def normalize_increments(code):
-    code = re.sub(r'(\w+)\+\+(\s*)([;,)]|$)', r'\1 = \1 + 1\2\3', code)
-    code = re.sub(r'\+\+(\w+)(\s*)([;,)]|$)', r'\1 = \1 + 1\2\3', code)
-    return code
 
 def unroll_loop(code, unroll_count=2, level=0):
-    code = normalize_increments(code)
     lines = [line.rstrip() for line in code.strip().split('\n') if line.strip()]
     if not lines:
         raise ValueError("Empty input")
@@ -82,7 +74,7 @@ def unroll_loop(code, unroll_count=2, level=0):
             cond_var = re.match(r'^\s*(\w+)\s*[<>=]', condition)
             if cond_var:
                 var = cond_var.group(1)
-                # result.append(inner_indent + f"{var} = {var} + 1;")
+                result.append(inner_indent + f"{var} = {var} + 1;")
 
         result.append(indent + "}")
 
@@ -145,35 +137,16 @@ class LoopUnrollSSAApp:
 
     def convert_to_ssa(self, raw_code):
         ssa_lines = []
-        version = defaultdict(int)
+        version = {}
         phi_id = 1
         stack = []
 
-        for line in raw_code:
-            line = line.strip()
-            # Check for variable declarations (e.g., 'int key = arr[i];')
-            decl_match = re.match(r'^\s*(int|float|double|char|long|short)\s+([\w,]+)\s*(?:=\s*(.*?))?;', line)
-            if decl_match:
-                var_type, vars_part, rhs = decl_match.groups()
-                # Split multiple variables (e.g., 'int a, b;')
-                for var in re.split(r'\s*,\s*', vars_part):
-                    var_name = var.strip()
-                    if var_name:
-                        version[var_name] = max(version[var_name], 0)
-            else:
-                # Collect variables in other lines
-                vars_in_line = re.findall(r'\b([a-zA-Z_]\w*)\b', line)
-                for var in vars_in_line:
-                    if not var.isdigit() and var not in ['if', 'else', 'while', 'for']:
-                        version[var] = max(version[var], 0)
-
-
         def get_var_version(var):
-            return f"{var}_{version[var]}" if var in version else var
+            version.setdefault(var, 0)
+            return f"{var}_{version[var]}"
 
         def bump_version(var):
-            if var.isdigit():
-                return var
+            version.setdefault(var, 0)
             version[var] += 1
             return f"{var}_{version[var]}"
 
@@ -181,82 +154,54 @@ class LoopUnrollSSAApp:
             line = line.strip()
             if not line or line.startswith("//"):
                 continue
-            
-            decl_match = re.match(r'^\s*(int|float|double|char|long|short)\s+([\w,]+)\s*(?:=\s*(.*?))?;', line)
-            if decl_match:
-                var_type, vars_part, rhs = decl_match.groups()
-                vars_decl = re.split(r'\s*,\s*', vars_part)
-                for var in vars_decl:
-                    var_name = var.strip()
-                    if rhs and '=' in line:
-                        # Process assignment part
-                        rhs_clean = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), rhs)
-                        new_var = bump_version(var_name)
-                        ssa_lines.append(f"{new_var} = {rhs_clean}")
-                    else:
-                        # Declaration without assignment
-                        new_var = bump_version(var_name)
-                        ssa_lines.append(f"{new_var} = ?")  # Unknown initial value
-                continue
-            
+
             if re.match(r"(if|else if|while)\s*\(.*\)", line):
+                keyword = line.split("(")[0].strip()
                 condition = re.search(r"\((.*?)\)", line).group(1)
-                # Replace array names with latest versions
-                updated_cond = re.sub(r'(\w+)(\[\w+\])', lambda m: f"{get_var_version(m.group(1))}{m.group(2)}", condition)
-                ssa_lines.append(f"φ{phi_id} = ({updated_cond})")
-                stack.append((phi_id, dict(version), {}, set()))
+                vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
+                cond_expr = condition
+                for var in set(vars_in_cond):
+                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
+                ssa_lines.append(f"φ{phi_id} = ({cond_expr})  // {keyword}")
+                pre_versions = {var: version.get(var, 0) for var in version}
+                stack.append((phi_id, pre_versions, {}))
                 phi_id += 1
                 continue
 
-            if "=" in line:
-                left, right = map(str.strip, line.split("=", 1))
-                right = right.rstrip(";")
+            elif line.startswith("assert"):
+                condition = re.search(r"\((.*?)\)", line).group(1)
+                vars_in_cond = re.findall(r"\b[a-zA-Z_]\w*\b", condition)
+                cond_expr = condition
+                for var in set(vars_in_cond):
+                    cond_expr = re.sub(rf'\b{var}\b', get_var_version(var), cond_expr)
+                ssa_lines.append(f"assert({cond_expr})")
+                continue
 
-                left_clean = re.sub(r'^\s*(int|float|double|char|long|short)\s+', '', left).strip()
-
-                # Array assignment (left side has [])
-                if '[' in left:
-                    array_match = re.match(r'(\w+)\s*\[\s*([^\]]+)\s*\]', left_clean)
-                    if array_match:
-                        array_name, index = array_match.groups()
-                        index_clean = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), index)
-                        # Bump array version
-                        new_version = bump_version(array_name)
-                        # Update right side variables
-                        updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
-                        ssa_lines.append(f"{new_version}[{index_clean}] = {updated_right}")
-                        if stack:
-                            stack[-1][3].add(array_name)  # Track array modification
-                        continue
-
-                # Scalar assignment (temp = ...)
-                else:
-                    # Update right side variables
-                    updated_right = re.sub(r'\b(\w+)\b', lambda m: get_var_version(m.group(1)), right)
-                    new_left = bump_version(left_clean)
-                    ssa_lines.append(f"{new_left} = {updated_right}")
-                    if stack:
-                        stack[-1][2][left_clean] = version[left_clean]  # Track scalar modification
+            elif "=" in line:
+                parts = line.replace(";", "").split("=")
+                if len(parts) != 2:
+                    ssa_lines.append(f"// Skipped unsupported line: {line}")
                     continue
+                left, right = map(str.strip, parts)
+                right_vars = re.findall(r"\b[a-zA-Z_]\w*\b", right)
+                new_right = right
+                for var in set(right_vars):
+                    new_right = re.sub(rf'\b{var}\b', get_var_version(var), new_right)
+                new_left = bump_version(left)
+                ssa_lines.append(f"{new_left} := {new_right}")
+                if stack:
+                    stack[-1][2][left] = version[left]
+                continue
 
             elif line == "}":
                 if stack:
-                    cond_phi, pre_versions, assigned_vars, assigned_arrays = stack.pop()
-                    
-                    # Merge scalar variables
+                    cond_phi, pre_versions, assigned_vars = stack.pop()
                     for var, new_ver in assigned_vars.items():
                         old_ver = pre_versions.get(var, 0)
                         if old_ver != new_ver:
-                            phi_var = bump_version(var)
-                            ssa_lines.append(f"{phi_var} = φ{cond_phi} ? {var}_{new_ver} : {var}_{old_ver}")
-                    
-                    # Merge arrays
-                    for array_name in assigned_arrays:
-                        old_ver = pre_versions.get(array_name, 0)
-                        current_ver = version[array_name]
-                        if old_ver != current_ver:
-                            phi_var = bump_version(array_name)
-                            ssa_lines.append(f"{phi_var} = φ{cond_phi} ? {array_name}_{current_ver} : {array_name}_{old_ver}")
+                            phi_result = bump_version(var)
+                            ssa_lines.append(f"{phi_result} := φ{cond_phi}? {var}_{old_ver+1} : {var}_{new_ver }")
+                continue
 
             else:
                 ssa_lines.append(f"// Unhandled: {line}")
