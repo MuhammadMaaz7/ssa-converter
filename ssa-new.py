@@ -99,7 +99,7 @@ def unroll_code(code, unroll_count, indent_level=0):
 
 
 import re
-import ast
+from copy import deepcopy
 
 class SSAConverter:
     def __init__(self, array_length=5):
@@ -136,8 +136,26 @@ class SSAConverter:
     def eval_expr(self, expr):
         """Evaluate a simple expression with variable substitution"""
         try:
-            # Create a copy of var_versions where each var is mapped to its numeric value
-            ctx = {var: int(ver) for var, ver in self.var_versions.items() if var.isalpha()}
+            # Replace array accesses with temporary variables
+            expr = re.sub(r'arr\[(\d+)\]', lambda m: f'arr{m.group(1)}', expr)
+            
+            # Create a context with variable values
+            ctx = {}
+            for var, ver in self.var_versions.items():
+                if var.isalpha():
+                    try:
+                        ctx[var] = int(ver)
+                    except:
+                        pass
+            
+            # Add array elements to context
+            for idx, ver in self.array_versions.items():
+                if idx.isdigit():
+                    try:
+                        ctx[f'arr{idx}'] = int(ver)
+                    except:
+                        pass
+                        
             return eval(expr, {}, ctx)
         except:
             return None
@@ -261,7 +279,13 @@ class SSAConverter:
             'is_else': False
         }
         self.context_stack.append(context)
-        self.if_else_stack.append({'phi_id': phi_id, 'if_vars': {}, 'else_vars': {}})
+        self.if_else_stack.append({
+            'phi_id': phi_id, 
+            'if_vars': {}, 
+            'else_vars': {},
+            'if_arrays': {},
+            'else_arrays': {}
+        })
         
         return phi_id
     
@@ -393,12 +417,16 @@ class SSAConverter:
                         new_arr = self.fresh_array(idx)
                         processed_rhs = self.process_expression(rhs)
                         self.current_block.append(f"{new_arr} = {processed_rhs}")
-                        return
-                
-                # More complex index expression
-                processed_idx = self.process_expression(idx_expr)
-                processed_rhs = self.process_expression(rhs)
-                self.current_block.append(f"arr[{processed_idx}] = {processed_rhs}")
+                    else:
+                        # Out of bounds array access
+                        processed_idx = self.process_expression(idx_expr)
+                        processed_rhs = self.process_expression(rhs)
+                        self.current_block.append(f"arr[{processed_idx}] = {processed_rhs}")
+                else:
+                    # More complex index expression
+                    processed_idx = self.process_expression(idx_expr)
+                    processed_rhs = self.process_expression(rhs)
+                    self.current_block.append(f"arr[{processed_idx}] = {processed_rhs}")
                 return
                 
             # Regular variable assignment
@@ -442,7 +470,7 @@ class SSAConverter:
         for i in range(self.array_length):
             self.array_versions[str(i)] = 0
 
-def convert_to_ssa(code, array_length=5):
+def convert_to_ssa(code, array_length=10):
     """Convert code to SSA form"""
     converter = SSAConverter(array_length)
     converter.initialize_array()
@@ -452,6 +480,7 @@ def convert_to_ssa(code, array_length=5):
         converter.process_line(line)
         
     return converter.get_ssa()
+
 
 def generate():
     try:
