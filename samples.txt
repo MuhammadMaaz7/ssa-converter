@@ -99,3 +99,48 @@ for (int i = 0; i < n - 1; i++) {
         }
     }
     return arr;
+
+//SSA
+assume for arr[3] = arr0, arr1, arr2
+temp = 0
+j0 = 0 //j=0
+φ1 = j0 < n - 1 //first loop
+φ2 = arr0 > arr1
+temp0 = arr0
+arr0_1 = arr1
+arr1_1 = temp0
+
+arr0_2 = j0
+
+arr0_3 = φ2 ? arr0_1 : arr0_2
+arr1_2 = φ2 ? arr1_1 : arr1
+
+j1 = j0+1 //j=1
+
+φ3 = j1 < n - 1 //second loop
+φ4 = arr1_2 > arr2
+
+temp1 = arr1_2
+arr1_3 = arr2
+arr2_1 = temp1
+
+arr1_4 = j1
+
+arr1_5 = φ4 ? arr1_3 : arr1_4
+arr2_2 = φ4 ? arr2_1 : arr2
+
+j2 = j1+1 //j=2
+
+//rolling back j=1
+
+j3 = φ3 ? j2 : j1
+arr1_6 = φ3 ? arr1_5 : arr1_2
+arr2_3 = φ3 ? arr2_2 : arr2
+
+//rolling back j=0
+
+j4 = φ1 ? j3 : j0
+arr0_4 = φ1 ? arr0_3 : arr0
+arr1_7 = φ1 ? arr1_6 : arr1
+
+return [arr0_4,arr1_7,arr2_3]
