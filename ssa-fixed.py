@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 import re
 from copy import deepcopy
+from smtlib import SSAtoZ3Converter
 
 def remove_comments(code):
     code = re.sub(r"//.*", "", code)
@@ -549,7 +550,7 @@ class SSAConverter:
         for i in range(self.array_length):
             index_key = f"arr_{i}"
             self.array_versions[index_key] = 0
-            self.current_block.append(f"arr{i}_0 = arr[{i}]  // Initial array element")
+            # self.current_block.append(f"arr{i}_0 = arr[{i}]  // Initial array element")
     
     def get_ssa(self):
         """Get the complete SSA form"""
@@ -621,6 +622,18 @@ def generate():
             ssa = convert_to_ssa(unrolled)
             ssa_output.delete("1.0", tk.END)
             ssa_output.insert(tk.END, ssa)
+
+            # Generate Z3 Code
+            try:
+                converter = SSAtoZ3Converter()
+                converter.parse_ssa(ssa)
+                z3_code = converter.generate_z3_code()
+                z3_output.delete("1.0", tk.END)
+                z3_output.insert(tk.END, z3_code)
+            except Exception as e:
+                z3_output.delete("1.0", tk.END)
+                z3_output.insert(tk.END, f"Z3 Generation Error: {str(e)}")
+                
         except Exception as e:
             ssa_output.delete("1.0", tk.END)
             ssa_output.insert(tk.END, f"SSA Conversion Error: {str(e)}")
@@ -673,5 +686,10 @@ unrolled_output.grid(row=5, column=0, columnspan=2, pady=5)
 ttk.Label(frame, text="SSA Code:").grid(row=6, column=0, sticky="w")
 ssa_output = scrolledtext.ScrolledText(frame, height=15, width=80)
 ssa_output.grid(row=7, column=0, columnspan=2, pady=5)
+
+# Z3 Output
+ttk.Label(frame, text="Z3 Code:").grid(row=8, column=0, sticky="w")
+z3_output = scrolledtext.ScrolledText(frame, height=15, width=80)
+z3_output.grid(row=9, column=0, columnspan=2, pady=5)
 
 root.mainloop()
