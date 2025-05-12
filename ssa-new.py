@@ -139,11 +139,17 @@ class SSAConverter:
         result = expr
         # Sort variables by length in descending order to avoid partial matches
         for var in sorted(self.var_versions.keys(), key=lambda x: -len(x)):
-            if var.isalpha():  # Only match whole variable names
+            if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', var):  # valid variable name pattern
                 pattern = rf'\b{var}\b'
                 version = self.get_var_version(var)
+                #print("Version : %s",version)
+                #print(result," 1")
+                print(f"Replacing '{var}' with '{var}_{version}'")
                 result = re.sub(pattern, f"{var}_{version}", result)
+                #print(result," 2")
                 
+        if(result=="min_idx"):
+            print("Pakra gaya")
         return result
     
     def process_array_access(self, array_access):
@@ -201,11 +207,13 @@ class SSAConverter:
             result = result[:start] + processed_access + result[end:]
         
         # Then handle variables in expressions
+       # print(self.process_variable_references(result))
         return self.process_variable_references(result)
     
     def start_if_block(self, condition):
         """Start an if block, saving context"""
         processed_condition = self.process_expression(condition)
+       # print(processed_condition)
         phi_id = self.phi_counter
         self.phi_counter += 1
         self.current_block.append(f"φ{phi_id} = {processed_condition}")
@@ -246,6 +254,151 @@ class SSAConverter:
         self.var_versions = {var: ver for var, ver in if_context['vars'].items()}
         self.array_versions = {idx: ver for idx, ver in if_context['arrays'].items()}
     
+    # def end_block(self):
+    #     """End a block (if, else) with proper phi node creation"""
+    #     if not self.context_stack:
+    #         return
+            
+    #     context = self.context_stack.pop()
+    #     phi_id = context.get('phi_id')
+        
+    #     if context.get('is_else'):
+    #         # End of else block - create comprehensive phi nodes
+    #         if_data = self.if_else_stack.pop()
+            
+    #         # Process all variables modified in either branch
+    #         all_vars = set(if_data['if_vars'].keys()) | set(self.var_versions.keys())
+    #         for var in all_vars:
+    #             if_ver = if_data['if_vars'].get(var, context['vars'].get(var, 0))
+    #             else_ver = self.var_versions.get(var, context['vars'].get(var, 0))
+                
+    #             # Only create phi node if versions differ
+    #             if if_ver != else_ver:
+    #                 new_var = self.fresh_var(var)
+    #                 self.current_block.append(f"{new_var} = φ{phi_id} ? {var}_{if_ver} : {var}_{else_ver}")
+            
+    #         # Process arrays - make phi nodes for each potentially modified array element
+    #         all_indices = set(if_data['if_arrays'].keys()) | set(self.array_versions.keys())
+    #         for idx_key in all_indices:
+    #             if '_' in idx_key:
+    #                 array_name, idx = idx_key.split('_')
+    #                 if_ver = if_data['if_arrays'].get(idx_key, context['arrays'].get(idx_key, 0))
+    #                 else_ver = self.array_versions.get(idx_key, context['arrays'].get(idx_key, 0))
+                    
+    #                 # Only create phi node if versions differ
+    #                 if if_ver != else_ver:
+    #                     # Create new version for this array element
+    #                     new_ver = max(if_ver, else_ver) + 1
+    #                     self.array_versions[idx_key] = new_ver
+    #                     self.current_block.append(
+    #                         f"{array_name}{idx}_{new_ver} = φ{phi_id} ? {array_name}{idx}_{if_ver} : {array_name}{idx}_{else_ver}"
+    #                     )
+    #     else:
+    #         # End of if block without else - create phi nodes comparing with state before if
+    #         for var, before_ver in context['vars'].items():
+    #             after_ver = self.var_versions.get(var, before_ver)
+    #             if before_ver != after_ver:
+    #                 new_var = self.fresh_var(var)
+    #                 self.current_block.append(f"{new_var} = φ{phi_id} ? {var}_{after_ver} : {var}_{before_ver}")
+            
+    #         # Create phi nodes for array elements
+    #         for idx_key, before_ver in context['arrays'].items():
+    #             after_ver = self.array_versions.get(idx_key, before_ver)
+    #             if before_ver != after_ver and '_' in idx_key:
+    #                 array_name, idx = idx_key.split('_')
+    #                 new_ver = max(after_ver, before_ver) + 1
+    #                 self.array_versions[idx_key] = new_ver
+    #                 self.current_block.append(
+    #                     f"{array_name}{idx}_{new_ver} = φ{phi_id} ? {array_name}{idx}_{after_ver} : {array_name}{idx}_{before_ver}"
+    #                 )
+    
+    # def handle_assignment(self, lhs, rhs):
+    #     """Handle variable or array assignment"""
+    #     rhs = self.process_expression(rhs)
+        
+    #     # Handle array assignment: arr[i] = value
+    #     if '[' in lhs and ']' in lhs:
+    #         array_match = re.match(r'(\w+)\[(.*)\]', lhs)
+    #         if array_match:
+    #             array_name, idx_expr = array_match.groups()
+    #             processed_idx = self.process_variable_references(idx_expr)
+                
+    #             # If index is a simple number
+    #             if processed_idx.isdigit():
+    #                 idx = int(processed_idx)
+    #                 if 0 <= idx < self.array_length:
+    #                     new_arr = self.fresh_array(idx, array_name)
+    #                     self.current_block.append(f"{new_arr} = {rhs}")
+    #                 else:
+    #                     # Out of bounds or complex index
+    #                     self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+    #             else:
+    #                 # For expressions like j_1, try to resolve
+    #                 j_match = re.match(r'(\w+)_(\d+)', processed_idx)
+    #                 if j_match and j_match.group(1).isalpha():
+    #                     # We can't determine the actual value at compile time
+    #                     # So we need to represent it symbolically but preserve SSA form
+    #                     self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+    #                 elif "+" in processed_idx:
+    #                     # Handle j+1 type indices similarly
+    #                     self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+    #                 else:
+    #                     # Other symbolic indices
+    #                     self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+    #     else:
+    #         # Regular variable assignment
+    #         var = lhs.strip()
+    #         new_var = self.fresh_var(var)
+    #         #print(new_var)
+    #         self.current_block.append(f"{new_var} = {rhs}")
+    def handle_assignment(self, lhs, rhs):
+        """Handle variable or array assignment with proper phi condition checking"""
+        rhs = self.process_expression(rhs)
+        
+        # Handle array assignment: arr[i] = value
+        if '[' in lhs and ']' in lhs:
+            array_match = re.match(r'(\w+)\[(.*)\]', lhs)
+            if array_match:
+                array_name, idx_expr = array_match.groups()
+                processed_idx = self.process_expression(idx_expr)
+                
+                # If we're inside a conditional block, we need to track the phi conditions
+                if self.context_stack:
+                    current_phi = self.context_stack[-1]['phi_id']
+                    # Create a new version that depends on the phi condition
+                    if processed_idx.isdigit():
+                        idx = int(processed_idx)
+                        if 0 <= idx < self.array_length:
+                            new_arr = self.fresh_array(idx, array_name)
+                            self.current_block.append(f"{new_arr} = φ{current_phi} ? {rhs} : {array_name}{idx}_{self.get_array_version(array_name, idx)-1}")
+                            return
+                    # For symbolic indices, we need to handle differently
+                    self.current_block.append(f"{array_name}[{processed_idx}] = φ{current_phi} ? {rhs} : {array_name}[{processed_idx}]")
+                    return
+                
+                # Normal array assignment when not in conditional block
+                if processed_idx.isdigit():
+                    idx = int(processed_idx)
+                    if 0 <= idx < self.array_length:
+                        new_arr = self.fresh_array(idx, array_name)
+                        self.current_block.append(f"{new_arr} = {rhs}")
+                    else:
+                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+                else:
+                    self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
+        else:
+            # Regular variable assignment
+            var = lhs.strip()
+            new_var = self.fresh_var(var)
+            
+            # If we're inside a conditional block, make the assignment depend on the phi condition
+            if self.context_stack:
+                current_phi = self.context_stack[-1]['phi_id']
+                prev_version = f"{var}_{self.get_var_version(var)}"
+                self.current_block.append(f"{new_var} = φ{current_phi} ? {rhs} : {prev_version}")
+            else:
+                self.current_block.append(f"{new_var} = {rhs}")
+
     def end_block(self):
         """End a block (if, else) with proper phi node creation"""
         if not self.context_stack:
@@ -277,9 +430,7 @@ class SSAConverter:
                     if_ver = if_data['if_arrays'].get(idx_key, context['arrays'].get(idx_key, 0))
                     else_ver = self.array_versions.get(idx_key, context['arrays'].get(idx_key, 0))
                     
-                    # Only create phi node if versions differ
                     if if_ver != else_ver:
-                        # Create new version for this array element
                         new_ver = max(if_ver, else_ver) + 1
                         self.array_versions[idx_key] = new_ver
                         self.current_block.append(
@@ -304,45 +455,8 @@ class SSAConverter:
                         f"{array_name}{idx}_{new_ver} = φ{phi_id} ? {array_name}{idx}_{after_ver} : {array_name}{idx}_{before_ver}"
                     )
     
-    def handle_assignment(self, lhs, rhs):
-        """Handle variable or array assignment"""
-        rhs = self.process_expression(rhs)
-        
-        # Handle array assignment: arr[i] = value
-        if '[' in lhs and ']' in lhs:
-            array_match = re.match(r'(\w+)\[(.*)\]', lhs)
-            if array_match:
-                array_name, idx_expr = array_match.groups()
-                processed_idx = self.process_variable_references(idx_expr)
+    # ... (rest of the class remains the same)
                 
-                # If index is a simple number
-                if processed_idx.isdigit():
-                    idx = int(processed_idx)
-                    if 0 <= idx < self.array_length:
-                        new_arr = self.fresh_array(idx, array_name)
-                        self.current_block.append(f"{new_arr} = {rhs}")
-                    else:
-                        # Out of bounds or complex index
-                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
-                else:
-                    # For expressions like j_1, try to resolve
-                    j_match = re.match(r'(\w+)_(\d+)', processed_idx)
-                    if j_match and j_match.group(1).isalpha():
-                        # We can't determine the actual value at compile time
-                        # So we need to represent it symbolically but preserve SSA form
-                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
-                    elif "+" in processed_idx:
-                        # Handle j+1 type indices similarly
-                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
-                    else:
-                        # Other symbolic indices
-                        self.current_block.append(f"{array_name}[{processed_idx}] = {rhs}")
-        else:
-            # Regular variable assignment
-            var = lhs.strip()
-            new_var = self.fresh_var(var)
-            self.current_block.append(f"{new_var} = {rhs}")
-    
     def process_line(self, line):
         """Process a single line of code"""
         line = line.strip()
