@@ -139,7 +139,7 @@ class SSAConverter:
         result = expr
         # Sort variables by length in descending order to avoid partial matches
         for var in sorted(self.var_versions.keys(), key=lambda x: -len(x)):
-            if var.isalpha():  # Only match whole variable names
+            if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', var):  # valid variable name pattern  # Only match whole variable names
                 pattern = rf'\b{var}\b'
                 version = self.get_var_version(var)
                 result = re.sub(pattern, f"{var}_{version}", result)
