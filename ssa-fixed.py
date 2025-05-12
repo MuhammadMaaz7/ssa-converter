@@ -1,11 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
-import re
-from copy import deepcopy
-from smtlib import SSAtoZ3Converter
-import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 import re
+from smtlib import SSAtoZ3Converter
 from functools import partial
 
 def remove_comments(code):
@@ -611,7 +607,6 @@ def convert_to_ssa(code, array_length=10):
         converter.process_line(line)
         
     return converter.get_ssa()
-
 
 class SSAConverterApp:
     def __init__(self, root):

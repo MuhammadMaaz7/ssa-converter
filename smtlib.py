@@ -300,7 +300,7 @@ class SSAtoZ3Converter:
                     sorted_check.append(f"(<= {var1} {var2})")
                 
                 if sorted_check:
-                    self.z3_code.append("\n; Check that the final array is sorted")
+                    # self.z3_code.append("\n; Check that the final array is sorted")
                     self.z3_code.append(f"(assert (and {' '.join(sorted_check)}))")
 
     def generate_z3_code(self) -> str:
