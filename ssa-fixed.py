@@ -3,6 +3,10 @@ from tkinter import ttk, scrolledtext
 import re
 from copy import deepcopy
 from smtlib import SSAtoZ3Converter
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, filedialog
+import re
+from functools import partial
 
 def remove_comments(code):
     code = re.sub(r"//.*", "", code)
@@ -609,87 +613,335 @@ def convert_to_ssa(code, array_length=10):
     return converter.get_ssa()
 
 
-def generate():
-    try:
-        code = input_text.get("1.0", tk.END)
-        unroll_count = int(unroll_var.get())
-        unrolled = unroll_code(code, unroll_count)
+class SSAConverterApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("SSA Converter Tool")
+        self.root.geometry("1000x800")
+        self.root.minsize(800, 600)
         
-        unrolled_output.delete("1.0", tk.END)
-        unrolled_output.insert(tk.END, unrolled)
+        # Set theme
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
         
-        try:
-            ssa = convert_to_ssa(unrolled)
-            ssa_output.delete("1.0", tk.END)
-            ssa_output.insert(tk.END, ssa)
-
-            # Generate Z3 Code
-            try:
-                converter = SSAtoZ3Converter()
-                converter.parse_ssa(ssa)
-                z3_code = converter.generate_z3_code()
-                z3_output.delete("1.0", tk.END)
-                z3_output.insert(tk.END, z3_code)
-            except Exception as e:
-                z3_output.delete("1.0", tk.END)
-                z3_output.insert(tk.END, f"Z3 Generation Error: {str(e)}")
-                
-        except Exception as e:
-            ssa_output.delete("1.0", tk.END)
-            ssa_output.insert(tk.END, f"SSA Conversion Error: {str(e)}")
+        # Configure colors
+        self.bg_color = "#f5f5f5"  # Light gray
+        self.accent_color = "#4a86e8"  # Blue
+        self.text_color = "#333333"  # Dark gray
+        self.root.configure(bg=self.bg_color)
+        
+        # Configure styles
+        self.style.configure('TFrame', background=self.bg_color)
+        self.style.configure('TLabel', background=self.bg_color, foreground=self.text_color, font=('Arial', 10))
+        self.style.configure('TButton', background=self.accent_color, foreground='white', borderwidth=0, font=('Arial', 10, 'bold'))
+        self.style.configure('Header.TLabel', font=('Arial', 14, 'bold'), background=self.bg_color, foreground=self.text_color)
+        self.style.configure('Mode.TButton', font=('Arial', 11), padding=8)
+        
+        # Current mode
+        self.current_mode = tk.StringVar(value="verification")
+        
+        self.create_widgets()
+        
+    def create_widgets(self):
+        # Main container
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Header with title and mode selector
+        header_frame = ttk.Frame(main_container)
+        header_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        title_label = ttk.Label(header_frame, text="SSA Converter Tool", style='Header.TLabel')
+        title_label.pack(side=tk.LEFT)
+        
+        # Mode selector
+        mode_frame = ttk.Frame(header_frame)
+        mode_frame.pack(side=tk.RIGHT)
+        
+        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 10))
+        
+        verification_btn = ttk.Radiobutton(mode_frame, text="Verification", variable=self.current_mode, 
+                                           value="verification", command=self.change_mode)
+        verification_btn.pack(side=tk.LEFT, padx=5)
+        
+        equivalence_btn = ttk.Radiobutton(mode_frame, text="Equivalence", variable=self.current_mode, 
+                                          value="equivalence", command=self.change_mode)
+        equivalence_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Content area
+        self.content_frame = ttk.Frame(main_container)
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Initialize with verification mode
+        self.setup_verification_mode()
+        
+    def setup_verification_mode(self):
+        # Clear existing content
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
             
-    except Exception as e:
-        unrolled_output.delete("1.0", tk.END)
-        unrolled_output.insert(tk.END, f"Error: {str(e)}")
-        ssa_output.delete("1.0", tk.END)
-        ssa_output.insert(tk.END, f"Error: {str(e)}")
-
-
-# And update the SSAConverter's eval_expr method:
-def eval_expr(self, expr):
-    # Handle array indices more robustly
-    expr = re.sub(r'arr\[(\d+)\]', lambda m: f'arr{m.group(1)}', expr)
+        # Input frame
+        input_frame = ttk.Frame(self.content_frame)
+        input_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Left column - Code input
+        left_frame = ttk.Frame(input_frame)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        input_header = ttk.Frame(left_frame)
+        input_header.pack(fill=tk.X)
+        
+        ttk.Label(input_header, text="Input C++ Code").pack(side=tk.LEFT)
+        
+        # File operations
+        btn_frame = ttk.Frame(input_header)
+        btn_frame.pack(side=tk.RIGHT)
+        
+        ttk.Button(btn_frame, text="Load File", command=self.load_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Save", command=self.save_file).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Clear", command=self.clear_input).pack(side=tk.LEFT, padx=2)
+        
+        # Input text area
+        self.input_text = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, 
+                                                   font=('Consolas', 11), bg='white')
+        self.input_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        
+        # Right column - Settings
+        right_frame = ttk.Frame(input_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        
+        ttk.Label(right_frame, text="Settings").pack(anchor='w', pady=(0, 5))
+        
+        # Unroll settings
+        unroll_frame = ttk.Frame(right_frame)
+        unroll_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(unroll_frame, text="Number of Unrolls:").pack(side=tk.LEFT)
+        
+        self.unroll_var = tk.StringVar(value="2")
+        unroll_dropdown = ttk.Combobox(unroll_frame, textvariable=self.unroll_var, 
+                                      values=[1, 2, 3, 4, 5], state="readonly", width=5)
+        unroll_dropdown.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Generate button
+        generate_btn = ttk.Button(right_frame, text="Generate", command=self.generate)
+        generate_btn.pack(fill=tk.X, pady=10)
+        
+        # Output notebook
+        output_notebook = ttk.Notebook(self.content_frame)
+        output_notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Unrolled code tab
+        unrolled_frame = ttk.Frame(output_notebook)
+        output_notebook.add(unrolled_frame, text="Unrolled Code")
+        
+        self.unrolled_output = scrolledtext.ScrolledText(unrolled_frame, wrap=tk.WORD, 
+                                                        font=('Consolas', 11), bg='white')
+        self.unrolled_output.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # SSA code tab
+        ssa_frame = ttk.Frame(output_notebook)
+        output_notebook.add(ssa_frame, text="SSA Code")
+        
+        self.ssa_output = scrolledtext.ScrolledText(ssa_frame, wrap=tk.WORD, 
+                                                  font=('Consolas', 11), bg='white')
+        self.ssa_output.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Z3 code tab
+        z3_frame = ttk.Frame(output_notebook)
+        output_notebook.add(z3_frame, text="Z3 Code")
+        
+        self.z3_output = scrolledtext.ScrolledText(z3_frame, wrap=tk.WORD, 
+                                                 font=('Consolas', 11), bg='white')
+        self.z3_output.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     
-    # Replace variables with their current versions
-    for var in sorted(self.var_versions.keys(), key=lambda x: -len(x)):
-        expr = re.sub(rf'\b{var}\b', f'{var}{self.var_versions[var]}', expr)
-    return expr
+    def setup_equivalence_mode(self):
+        # Clear existing content
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+            
+        # Split view for two programs
+        paned_window = ttk.PanedWindow(self.content_frame, orient=tk.HORIZONTAL)
+        paned_window.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Left program frame
+        left_program = ttk.Frame(paned_window)
+        paned_window.add(left_program, weight=1)
+        
+        ttk.Label(left_program, text="Program 1").pack(anchor='w')
+        
+        self.program1_text = scrolledtext.ScrolledText(left_program, wrap=tk.WORD, 
+                                                      font=('Consolas', 11), bg='white')
+        self.program1_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        
+        # Right program frame
+        right_program = ttk.Frame(paned_window)
+        paned_window.add(right_program, weight=1)
+        
+        ttk.Label(right_program, text="Program 2").pack(anchor='w')
+        
+        self.program2_text = scrolledtext.ScrolledText(right_program, wrap=tk.WORD, 
+                                                      font=('Consolas', 11), bg='white')
+        self.program2_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        
+        # Settings and actions frame
+        settings_frame = ttk.Frame(self.content_frame)
+        settings_frame.pack(fill=tk.X, pady=10)
+        
+        # Unroll settings
+        ttk.Label(settings_frame, text="Number of Unrolls:").pack(side=tk.LEFT)
+        
+        self.equivalence_unroll_var = tk.StringVar(value="2")
+        unroll_dropdown = ttk.Combobox(settings_frame, textvariable=self.equivalence_unroll_var, 
+                                      values=[1, 2, 3, 4, 5], state="readonly", width=5)
+        unroll_dropdown.pack(side=tk.LEFT, padx=(5, 15))
+        
+        # Compare button
+        compare_btn = ttk.Button(settings_frame, text="Check Equivalence", 
+                                command=self.check_equivalence)
+        compare_btn.pack(side=tk.RIGHT)
+        
+        # Results area
+        results_frame = ttk.Frame(self.content_frame)
+        results_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(results_frame, text="Equivalence Analysis Results").pack(anchor='w')
+        
+        self.results_output = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, 
+                                                       font=('Consolas', 11), bg='white')
+        self.results_output.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+    
+    def change_mode(self):
+        mode = self.current_mode.get()
+        if mode == "verification":
+            self.setup_verification_mode()
+        else:
+            self.setup_equivalence_mode()
+    
+    def generate(self):
+        try:
+            code = self.input_text.get("1.0", tk.END)
+            unroll_count = int(self.unroll_var.get())
+            
+            # Generate unrolled code
+            unrolled = unroll_code(code, unroll_count)
+            self.unrolled_output.delete("1.0", tk.END)
+            self.unrolled_output.insert(tk.END, unrolled)
+            
+            # Generate SSA code
+            try:
+                ssa = convert_to_ssa(unrolled)
+                self.ssa_output.delete("1.0", tk.END)
+                self.ssa_output.insert(tk.END, ssa)
+                
+                # Generate Z3 Code
+                try:
+                    converter = SSAtoZ3Converter()
+                    converter.parse_ssa(ssa)
+                    z3_code = converter.generate_z3_code()
+                    self.z3_output.delete("1.0", tk.END)
+                    self.z3_output.insert(tk.END, z3_code)
+                except Exception as e:
+                    self.z3_output.delete("1.0", tk.END)
+                    self.z3_output.insert(tk.END, f"Z3 Generation Error: {str(e)}")
+            except Exception as e:
+                self.ssa_output.delete("1.0", tk.END)
+                self.ssa_output.insert(tk.END, f"SSA Conversion Error: {str(e)}")
+                self.z3_output.delete("1.0", tk.END)
+                self.z3_output.insert(tk.END, "Z3 generation unavailable due to SSA error")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+    
+    def check_equivalence(self):
+        try:
+            program1 = self.program1_text.get("1.0", tk.END)
+            program2 = self.program2_text.get("1.0", tk.END)
+            unroll_count = int(self.equivalence_unroll_var.get())
+            
+            # Unroll both programs
+            unrolled1 = unroll_code(program1, unroll_count)
+            unrolled2 = unroll_code(program2, unroll_count)
+            
+            # Convert to SSA
+            ssa1 = convert_to_ssa(unrolled1)
+            ssa2 = convert_to_ssa(unrolled2)
+            
+            # Generate Z3 equivalence check
+            self.results_output.delete("1.0", tk.END)
+            self.results_output.insert(tk.END, "Analyzing equivalence...\n\n")
+            self.results_output.insert(tk.END, "Program 1 SSA:\n" + ssa1 + "\n\n")
+            self.results_output.insert(tk.END, "Program 2 SSA:\n" + ssa2 + "\n\n")
+            
+            # This would be where we'd implement the actual equivalence checking
+            self.results_output.insert(tk.END, "Z3 Equivalence Check:\n")
+            self.results_output.insert(tk.END, "// Placeholder for actual Z3 equivalence verification\n")
+            self.results_output.insert(tk.END, "from z3 import *\n\n")
+            self.results_output.insert(tk.END, "# This would contain the Z3 code to verify equivalence\n")
+            self.results_output.insert(tk.END, "# between the two provided programs\n")
+            
+        except Exception as e:
+            self.results_output.delete("1.0", tk.END)
+            self.results_output.insert(tk.END, f"Error during equivalence check: {str(e)}")
+    
+    def load_file(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("C/C++ files", "*.c;*.cpp"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, 'r') as file:
+                    content = file.read()
+                    if self.current_mode.get() == "verification":
+                        self.input_text.delete("1.0", tk.END)
+                        self.input_text.insert(tk.END, content)
+                    else:
+                        # Ask which program to load into
+                        choice = messagebox.askquestion("Load File", 
+                                                       "Load into Program 1? (No will load into Program 2)")
+                        if choice == 'yes':
+                            self.program1_text.delete("1.0", tk.END)
+                            self.program1_text.insert(tk.END, content)
+                        else:
+                            self.program2_text.delete("1.0", tk.END)
+                            self.program2_text.insert(tk.END, content)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
+    
+    def save_file(self):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".cpp",
+            filetypes=[("C++ files", "*.cpp"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, 'w') as file:
+                    if self.current_mode.get() == "verification":
+                        content = self.input_text.get("1.0", tk.END)
+                    else:
+                        # Ask which program to save
+                        choice = messagebox.askquestion("Save File", 
+                                                       "Save Program 1? (No will save Program 2)")
+                        if choice == 'yes':
+                            content = self.program1_text.get("1.0", tk.END)
+                        else:
+                            content = self.program2_text.get("1.0", tk.END)
+                    file.write(content)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save file: {str(e)}")
+    
+    def clear_input(self):
+        if self.current_mode.get() == "verification":
+            self.input_text.delete("1.0", tk.END)
+        else:
+            # Ask which program to clear
+            choice = messagebox.askquestion("Clear Input", 
+                                           "Clear Program 1? (No will clear Program 2)")
+            if choice == 'yes':
+                self.program1_text.delete("1.0", tk.END)
+            else:
+                self.program2_text.delete("1.0", tk.END)
 
-# GUI Setup
-root = tk.Tk()
-root.title("C++ to SSA Converter")
-
-frame = ttk.Frame(root, padding=10)
-frame.grid(row=0, column=0, sticky="nsew")
-
-# Code Input
-ttk.Label(frame, text="Enter C++ Code:").grid(row=0, column=0, sticky="w")
-input_text = scrolledtext.ScrolledText(frame, height=10, width=80)
-input_text.grid(row=1, column=0, columnspan=2, pady=5)
-
-# Unroll Dropdown
-ttk.Label(frame, text="Number of Unrolls:").grid(row=2, column=0, sticky="w")
-unroll_var = tk.StringVar()
-unroll_dropdown = ttk.Combobox(frame, textvariable=unroll_var, values=[1, 2, 3, 4, 5], state="readonly")
-unroll_dropdown.grid(row=2, column=1, sticky="w")
-unroll_dropdown.set("2")
-
-# Buttons
-ttk.Button(frame, text="Generate SSA", command=generate).grid(row=3, column=0, pady=5, sticky="w")
-
-# Unrolled Output
-ttk.Label(frame, text="Unrolled Code:").grid(row=4, column=0, sticky="w")
-unrolled_output = scrolledtext.ScrolledText(frame, height=10, width=80)
-unrolled_output.grid(row=5, column=0, columnspan=2, pady=5)
-
-# SSA Output
-ttk.Label(frame, text="SSA Code:").grid(row=6, column=0, sticky="w")
-ssa_output = scrolledtext.ScrolledText(frame, height=15, width=80)
-ssa_output.grid(row=7, column=0, columnspan=2, pady=5)
-
-# Z3 Output
-ttk.Label(frame, text="Z3 Code:").grid(row=8, column=0, sticky="w")
-z3_output = scrolledtext.ScrolledText(frame, height=15, width=80)
-z3_output.grid(row=9, column=0, columnspan=2, pady=5)
-
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SSAConverterApp(root)
+    root.mainloop()
