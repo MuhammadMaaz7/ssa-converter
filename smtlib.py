@@ -10,10 +10,23 @@ class SSAtoZ3Converter:
         self.array_accesses: Set[str] = set()        # Track array access patterns
         self.array_size = 4                          # Default array size
         self.phi_conditions: Dict[str, str] = {}     # Track conditions for phi nodes
+        self.symbolic_n = True                       # Whether to treat n as a symbolic variable
 
     def parse_ssa(self, ssa_code: str) -> None:
         """Parse the SSA code and generate Z3 SMT-LIB code."""
         self.preprocess_ssa(ssa_code)
+        
+        # Add header
+        self.z3_code.append("; SMT-LIB translation of SSA code")
+        
+        # Declare n (array size parameter)
+        if self.symbolic_n:
+            self.z3_code.append("(declare-const n Int)")
+            self.z3_code.append("(assert (> n 1))")  # Ensure n is at least 2
+        else:
+            self.z3_code.append("(define-const n Int 4)")  # Fixed array size
+        
+        self.z3_code.append("")  # Empty line for readability
         
         # Add declarations for array elements
         if self.array_variables:
@@ -22,6 +35,7 @@ class SSAtoZ3Converter:
                     self.z3_code.append(f"(declare-const {arr_name}{i} Int)")
                 
                 # Initial values (can be customized)
+                self.z3_code.append("; Initial array values")
                 for i in range(self.array_size):
                     self.z3_code.append(f"(assert (= {arr_name}{i} {self.array_size - i}))")
                 
@@ -182,44 +196,111 @@ class SSAtoZ3Converter:
 
     def _translate_condition(self, condition: str) -> str:
         """Translate an SSA condition to Z3 format."""
-        # Replace && with 'and'
-        condition = condition.replace('&&', ' and ')
+        # Handle complex conditions with subtraction and comparison
+        # For example: "i_1 < n - 1" => "(< i_1 (- n 1))"
+        subtraction_cmp_match = re.match(r'(\w+(?:_\d+)?)\s*(<|>|<=|>=)\s*(\w+(?:_\d+)?)\s*-\s*(\d+)', condition)
+        if subtraction_cmp_match:
+            var1 = subtraction_cmp_match.group(1)
+            op = subtraction_cmp_match.group(2)
+            var2 = subtraction_cmp_match.group(3)
+            num = subtraction_cmp_match.group(4)
+            op_map = {'<': '<', '>': '>', '<=': '<=', '>=': '>='}
+            z3_op = op_map.get(op, op)
+            return f"({z3_op} {var1} (- {var2} {num}))"
+            
+        # Handle complex conditions with n - i - 1 format
+        # For example: "j_1 < n - i_1 - 1" => "(< j_1 (- (- n i_1) 1))"
+        double_subtraction_cmp_match = re.match(r'(\w+(?:_\d+)?)\s*(<|>|<=|>=)\s*(\w+(?:_\d+)?)\s*-\s*(\w+(?:_\d+)?)\s*-\s*(\d+)', condition)
+        if double_subtraction_cmp_match:
+            var1 = double_subtraction_cmp_match.group(1)
+            op = double_subtraction_cmp_match.group(2)
+            var2 = double_subtraction_cmp_match.group(3)
+            var3 = double_subtraction_cmp_match.group(4)
+            num = double_subtraction_cmp_match.group(5)
+            op_map = {'<': '<', '>': '>', '<=': '<=', '>=': '>='}
+            z3_op = op_map.get(op, op)
+            return f"({z3_op} {var1} (- (- {var2} {var3}) {num}))"
         
-        # Replace < and > operators
-        condition = re.sub(r'(\w+)\s*<\s*(\w+)', r'(< \1 \2)', condition)
-        condition = re.sub(r'(\w+)\s*>\s*(\w+)', r'(> \1 \2)', condition)
-        condition = re.sub(r'(\w+)\s*>=\s*(\w+)', r'(>= \1 \2)', condition)
-        condition = re.sub(r'(\w+)\s*<=\s*(\w+)', r'(<= \1 \2)', condition)
+        # Replace array access comparisons
+        # For example: "arr[j_1] > arr[j_1 + 1]" => "(> arr1 arr2)"
+        array_cmp_match = re.match(r'(\w+)\[([^]]+)\]\s*(<|>|<=|>=)\s*(\w+)\[([^]]+)\]', condition)
+        if array_cmp_match:
+            arr1_name = array_cmp_match.group(1)
+            idx1 = self._evaluate_index(array_cmp_match.group(2))
+            op = array_cmp_match.group(3)
+            arr2_name = array_cmp_match.group(4)
+            idx2 = self._evaluate_index(array_cmp_match.group(5))
+            
+            # Get latest versions of array elements
+            arr1_var = self._get_array_element_ref(arr1_name, idx1)
+            arr2_var = self._get_array_element_ref(arr2_name, idx2)
+            
+            op_map = {'<': '<', '>': '>', '<=': '<=', '>=': '>='}
+            z3_op = op_map.get(op, op)
+            
+            return f"({z3_op} {arr1_var} {arr2_var})"
+            
+        # Replace && with logical and
+        condition = re.sub(r'&&', ' and ', condition)
+        
+        # Find comparison expressions and replace them with proper SMT-LIB syntax
+        condition = re.sub(r'(\w+(?:_\d+)?)\s*<\s*(\w+(?:_\d+)?)', r'(< \1 \2)', condition)
+        condition = re.sub(r'(\w+(?:_\d+)?)\s*>\s*(\w+(?:_\d+)?)', r'(> \1 \2)', condition)
+        condition = re.sub(r'(\w+(?:_\d+)?)\s*>=\s*(\w+(?:_\d+)?)', r'(>= \1 \2)', condition)
+        condition = re.sub(r'(\w+(?:_\d+)?)\s*<=\s*(\w+(?:_\d+)?)', r'(<= \1 \2)', condition)
         
         # Handle array accesses
         condition = self._replace_array_accesses(condition)
         
-        # Handle complex expressions
+        # Fix: Properly format logical and expressions
         if ' and ' in condition:
             parts = condition.split(' and ')
-            return f"(and {' '.join(parts)})"
+            translated_parts = [part.strip() for part in parts]
+            return f"(and {' '.join(translated_parts)})"
         
         return condition
 
+    def _get_array_element_ref(self, arr_name: str, idx: int) -> str:
+        """Get reference to an array element with proper versioning."""
+        var_name = f"{arr_name}{idx}"
+        version = self.variable_versions.get(var_name, 0)
+        
+        if version > 0:
+            return f"{var_name}_{version}"
+        else:
+            return f"{var_name}"
+
     def _translate_expression(self, expr: str) -> str:
         """Translate an SSA expression to Z3 format."""
+        expr = expr.strip()
+        
         # Check if this is a simple variable reference
-        if re.match(r'^\w+_\d+$', expr.strip()):
-            return expr.strip()
+        if re.match(r'^\w+_\d+$', expr):
+            return expr
             
         # Handle array access
-        arr_match = re.match(r'(\w+)\[([^]]+)\]', expr.strip())
+        arr_match = re.match(r'(\w+)\[([^]]+)\]', expr)
         if arr_match:
-            return self._replace_array_accesses(expr.strip())
+            return self._replace_array_accesses(expr)
+        
+        # Handle multi-term arithmetic with parentheses
+        if '+' in expr and '-' in expr:
+            # Handle complex expressions like "n - i_1 - 1"
+            if re.match(r'(\w+(?:_\d+)?)\s*-\s*(\w+(?:_\d+)?)\s*-\s*(\d+)', expr):
+                match = re.match(r'(\w+(?:_\d+)?)\s*-\s*(\w+(?:_\d+)?)\s*-\s*(\d+)', expr)
+                var1 = match.group(1)
+                var2 = match.group(2)
+                num = match.group(3)
+                return f"(- (- {var1} {var2}) {num})"
         
         # Handle basic arithmetic
-        if '+' in expr:
+        if '+' in expr and not re.search(r'\[.+\+', expr):  # Ensure + is not inside array access
             parts = expr.split('+')
             left = self._translate_expression(parts[0].strip())
             right = self._translate_expression(parts[1].strip())
             return f"(+ {left} {right})"
         
-        if '-' in expr:
+        if '-' in expr and not re.search(r'\[.+-', expr):  # Ensure - is not inside array access
             parts = expr.split('-')
             if len(parts) == 2:  # Binary subtraction
                 left = self._translate_expression(parts[0].strip())
@@ -227,10 +308,10 @@ class SSAtoZ3Converter:
                 return f"(- {left} {right})"
         
         # Handle simple value
-        if expr.strip().isdigit() or expr.strip() == "n":
-            return expr.strip()
+        if expr.isdigit() or expr == "n":
+            return expr
             
-        return expr.strip()
+        return expr
 
     def _replace_array_accesses(self, expr: str) -> str:
         """Replace array accesses with their variable names."""
@@ -249,7 +330,7 @@ class SSAtoZ3Converter:
             version = self.variable_versions.get(var_name, 0)
             
             if version > 0:
-                return f"{var_name}_{version - 1}"
+                return f"{var_name}_{version}"
             else:
                 return f"{var_name}"
                 
@@ -265,6 +346,7 @@ class SSAtoZ3Converter:
         add_match = re.match(r'(\w+)_\d+\s*\+\s*(\d+)', index_expr)
         if add_match:
             # For simplicity, just return the numeric part
+            # This is an estimation - in a real system we'd need to track variable values
             return int(add_match.group(2))
             
         # Handle j_1 - 1 type expressions
@@ -273,19 +355,20 @@ class SSAtoZ3Converter:
             # For variable - constant, assume index 0
             return 0
             
-        # Default to index 0 for complex expressions
-        return 0
+        # Default to index 1 for complex expressions
+        return 1  # Use index 1 as default as per the SSA code
 
     def _get_next_version(self, var_name: str) -> int:
         """Get the next version number for a variable."""
         current = self.variable_versions.get(var_name, 0)
         self.variable_versions[var_name] = current + 1
-        return current
+        return current + 1  # Return the new version (1-based)
 
     def _add_final_assertions(self) -> None:
         """Add final assertions checking the desired properties."""
         # If we're dealing with arrays, add a check that the final array is sorted
         if self.array_variables:
+            self.z3_code.append("\n; Check that the final array is sorted")
             for arr_name in self.array_variables:
                 sorted_check = []
                 
@@ -294,16 +377,21 @@ class SSAtoZ3Converter:
                     v1 = self.variable_versions.get(f"{arr_name}{i}", 0)
                     v2 = self.variable_versions.get(f"{arr_name}{i+1}", 0)
                     
-                    var1 = f"{arr_name}{i}_{v1-1}" if v1 > 0 else f"{arr_name}{i}"
-                    var2 = f"{arr_name}{i+1}_{v2-1}" if v2 > 0 else f"{arr_name}{i+1}"
+                    # Use proper versions or original array values
+                    var1 = f"{arr_name}{i}_{v1}" if v1 > 0 else f"{arr_name}{i}"
+                    var2 = f"{arr_name}{i+1}_{v2}" if v2 > 0 else f"{arr_name}{i+1}"
                     
                     sorted_check.append(f"(<= {var1} {var2})")
                 
                 if sorted_check:
-                    # self.z3_code.append("\n; Check that the final array is sorted")
                     self.z3_code.append(f"(assert (and {' '.join(sorted_check)}))")
+                    
+            # Add check-sat and get-model commands
+            self.z3_code.append("\n(check-sat)")
+            self.z3_code.append("(get-model)")
 
     def generate_z3_code(self) -> str:
         """Return the generated Z3 SMT-LIB code."""
         return "\n".join(self.z3_code)
+
 
