@@ -140,7 +140,7 @@ def get_verified_smtlib(smtlib_code: str) -> str:
 
     annotated_code = smtlib_code.strip()
     annotated_code += "\n\n; => Z3 VERIFICATION RESULT \n"
-    annotated_code += f"\n; Result: {'unsat (property verified)' if verified else 'sat (counterexample found)'}"
+    annotated_code += f"\n; Result: {'unsat' if verified else 'sat'}"
 
     if not verified and model:
         annotated_code += "\n; Counterexample Model:"
