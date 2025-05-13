@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import scrolledtext
 import re
+from smtlib import SSAtoZ3Converter
 
 def unroll_loop(code, unroll_count=2, level=0):
     lines = [line.rstrip() for line in code.strip().split('\n') if line.strip()]
@@ -107,6 +108,10 @@ class LoopUnrollSSAApp:
         self.ssa_output = scrolledtext.ScrolledText(root, height=10, width=100)
         self.ssa_output.pack()
 
+        tk.Label(root, text="Z3 Code:").pack()
+        self.z3_output = scrolledtext.ScrolledText(root, height=10, width=100)
+        self.z3_output.pack()
+
     def process(self):
         code = self.input_box.get("1.0", tk.END).strip()
         if not code:
@@ -123,9 +128,28 @@ class LoopUnrollSSAApp:
             self.unrolled_output.delete("1.0", tk.END)
             self.unrolled_output.insert(tk.END, unrolled)
 
-            ssa_code = self.convert_to_ssa(unrolled.splitlines())
-            self.ssa_output.delete("1.0", tk.END)
-            self.ssa_output.insert(tk.END, "\n".join(ssa_code))
+            try:
+                ssa = self.convert_to_ssa(unrolled)
+                self.ssa_output.delete("1.0", tk.END)
+                converter = SSAtoZ3Converter()
+                converter.parse_ssa(ssa)
+
+                z3_code = converter.generate_z3_code()
+                print(z3_code)
+                self.z3_output.delete("1.0", tk.END)
+                self.z3_output.insert(tk.END, z3_code)
+            except Exception as e:
+                self.z3_output.delete("1.0", tk.END)
+                self.z3_output.insert(tk.END, f"Z3 Generation Error: {str(e)}")
+                self.z3_output.insert(tk.END, z3_code)
+            except Exception as e:
+                self.z3_output.delete("1.0", tk.END)
+                self.z3_output.insert(tk.END, f"Z3 Generation Error: {str(e)}")
+
+            except Exception as e:
+                self.ssa_output.delete("1.0", tk.END)
+                self.ssa_output.insert(tk.END, f"SSA Conversion Error: {str(e)}")
+                
 
         except Exception as e:
             self.unrolled_output.delete("1.0", tk.END)

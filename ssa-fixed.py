@@ -833,7 +833,7 @@ class SSAConverterApp:
                 try:
                     converter = SSAtoZ3Converter()
                     converter.parse_ssa(ssa)
-                    z3_code = converter.generate_z3_code()
+                    z3_code = converter.get_verified_code()
                     self.z3_output.delete("1.0", tk.END)
                     self.z3_output.insert(tk.END, z3_code)
                 except Exception as e:
